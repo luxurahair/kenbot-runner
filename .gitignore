@@ -1,0 +1,8 @@
+.env
+.env.local
+.kenbot_env
+.venv
+__pycache__/
+*.pyc
+.DS_Store
+
