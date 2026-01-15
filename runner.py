@@ -44,6 +44,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
 DRY_RUN = os.getenv("KENBOT_DRY_RUN", "0").strip() == "1"
+FORCE_STOCK = (os.getenv("KENBOT_FORCE_STOCK") or "").strip().upper()
 
 if not FB_PAGE_ID or not FB_TOKEN:
     raise SystemExit("🛑 FB creds manquants: KENBOT_FB_PAGE_ID + KENBOT_FB_ACCESS_TOKEN")
@@ -101,13 +102,19 @@ def sold_prefix() -> str:
         "────────────────────\n\n"
     )
 
+def _preview_text(slug: str, event: str, fb_text: str) -> None:
+    preview = (fb_text or "").strip()
+    if len(preview) > 900:
+        preview = preview[:900] + "\n... [TRUNCATED]"
+    print(f"\n========== DRY_RUN {event}: {slug} ==========\n{preview}\n==============================================\n")
+
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
     inv_db = get_inventory_map(sb)
     posts_db = get_posts_map(sb)
 
-    # 1) Fetch 3 pages listing
+    # 1) Fetch listing pages (3 pages, configurable plus tard)
     urls: List[str] = []
     pages = [
         f"{BASE_URL}{INVENTORY_PATH}",
@@ -166,18 +173,74 @@ def main() -> None:
         if post_id and str(post.get("status", "")).upper() != "SOLD":
             msg = sold_prefix() + "Ce véhicule est vendu."
             if DRY_RUN:
-                preview = fb_text.strip()
-                if len(preview) > 900:
-                    preview = preview[:900] + "\n... [TRUNCATED]"
-                if not post_id:
-                    print(f"\n========== DRY_RUN NEW: {slug} ==========\n{preview}\n========================================\n")
-                    log_event(sb, slug, "NEW", {"dry_run": True, "preview_len": len(fb_text)})
-                else:
-                    print(f"\n====== DRY_RUN PRICE_CHANGED: {slug} ======\n{preview}\n===========================================\n")
-                    log_event(sb, slug, "PRICE_CHANGED", {"dry_run": True, "post_id": post_id, "preview_len": len(fb_text)})
-                continue
+                print(f"DRY_RUN: would MARK SOLD -> {slug} (post_id={post_id})")
+            else:
+                try:
+                    update_post_text(post_id, FB_TOKEN, msg)
+                except Exception:
+                    pass
 
-       
+        upsert_post(sb, {
+            "slug": slug,
+            "post_id": post_id,
+            "status": "SOLD",
+            "sold_at": now,
+            "last_updated_at": now,
+        })
+        log_event(sb, slug, "SOLD", {"slug": slug, "dry_run": DRY_RUN})
+
+    # 5) PRICE_CHANGED
+    price_changed: List[str] = []
+    for slug in common_slugs:
+        old = inv_db.get(slug) or {}
+        new = current.get(slug) or {}
+        if (old.get("price_int") is not None) and (new.get("price_int") is not None) and old.get("price_int") != new.get("price_int"):
+            price_changed.append(slug)
+
+    # 6) Targets NEW + PRICE_CHANGED
+    targets: List[Tuple[str, str]] = [(s, "NEW") for s in new_slugs] + [(s, "PRICE_CHANGED") for s in price_changed]
+
+    # FORCE_PREVIEW by stock
+    if FORCE_STOCK:
+        forced_slug = None
+        for s_slug, v_info in current.items():
+            if (v_info.get("stock") or "").strip().upper() == FORCE_STOCK:
+                forced_slug = s_slug
+                break
+        if forced_slug:
+            targets = [(forced_slug, "FORCE_PREVIEW")]
+            print(f"FORCE_PREVIEW enabled for stock {FORCE_STOCK} -> {forced_slug}")
+        else:
+            print(f"FORCE_PREVIEW: stock {FORCE_STOCK} introuvable dans l’inventaire courant")
+
+    # 7) Process targets
+    for slug, event in targets:
+        v = current.get(slug) or {}
+
+        vehicle_payload = {
+            "title": v.get("title") or "",
+            "price": f"{v.get('price_int'):,}".replace(",", " ") + " $" if v.get("price_int") else (v.get("price") or ""),
+            "mileage": f"{v.get('km_int'):,}".replace(",", " ") + " km" if v.get("km_int") else (v.get("mileage") or ""),
+            "stock": (v.get("stock") or "").strip().upper(),
+            "vin": (v.get("vin") or "").strip().upper(),
+            "url": v.get("url") or "",
+        }
+
+        fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload)
+
+        post_info = posts_db.get(slug) or {}
+        post_id = post_info.get("post_id")
+
+        photo_urls = v.get("photos") or []
+        photo_paths = download_photos(slug, photo_urls, limit=MAX_PHOTOS)
+
+        # DRY_RUN: print preview + log event, no FB writes
+        if DRY_RUN:
+            _preview_text(slug, event, fb_text)
+            log_event(sb, slug, event, {"dry_run": True, "photos": len(photo_paths), "post_id": post_id})
+            continue
+
+        # Publish NEW (no post_id) or update PRICE_CHANGED (existing post_id)
         if not post_id:
             main_photos = photo_paths[:POST_PHOTOS]
             extra_photos = photo_paths[POST_PHOTOS:MAX_PHOTOS]
@@ -212,15 +275,6 @@ def main() -> None:
                 log_event(sb, slug, "PRICE_CHANGED", {"post_id": post_id})
             except Exception:
                 pass
-
-    
-    # 5) PRICE_CHANGED
-    price_changed: List[str] = []
-    for slug in common_slugs:
-        old = inv_db.get(slug) or {}
-        new = current.get(slug) or {}
-        if (old.get("price_int") is not None) and (new.get("price_int") is not None) and old.get("price_int") != new.get("price_int"):
-            price_changed.append(slug)
 
     print(f"OK: NEW={len(new_slugs)} SOLD={len(disappeared_slugs)} PRICE_CHANGED={len(price_changed)}")
 
