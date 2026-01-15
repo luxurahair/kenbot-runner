@@ -43,6 +43,8 @@ FB_TOKEN   = (os.getenv("KENBOT_FB_ACCESS_TOKEN") or os.getenv("FB_PAGE_ACCESS_T
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
+DRY_RUN = os.getenv("KENBOT_DRY_RUN", "0").strip() == "1"
+
 if not FB_PAGE_ID or not FB_TOKEN:
     raise SystemExit("🛑 FB creds manquants: KENBOT_FB_PAGE_ID + KENBOT_FB_ACCESS_TOKEN")
 if not SUPABASE_URL or not SUPABASE_KEY:
@@ -162,11 +164,14 @@ def main() -> None:
         post_id = post.get("post_id")
 
         if post_id and str(post.get("status", "")).upper() != "SOLD":
-            try:
-                msg = sold_prefix() + "Ce véhicule est vendu."
-                update_post_text(post_id, FB_TOKEN, msg)
-            except Exception:
-                pass
+            msg = sold_prefix() + "Ce véhicule est vendu."
+            if DRY_RUN:
+                print(f"DRY_RUN: would MARK SOLD -> {slug} (post_id={post_id})")
+            else:
+                try:
+                    update_post_text(post_id, FB_TOKEN, msg)
+                except Exception:
+                    pass
 
         upsert_post(sb, {
             "slug": slug,
