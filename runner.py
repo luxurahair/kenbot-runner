@@ -166,60 +166,17 @@ def main() -> None:
         if post_id and str(post.get("status", "")).upper() != "SOLD":
             msg = sold_prefix() + "Ce véhicule est vendu."
             if DRY_RUN:
-                print(f"DRY_RUN: would MARK SOLD -> {slug} (post_id={post_id})")
-            else:
-                try:
-                    update_post_text(post_id, FB_TOKEN, msg)
-                except Exception:
-                    pass
+                preview = fb_text.strip()
+                if len(preview) > 900:
+                    preview = preview[:900] + "\n... [TRUNCATED]"
+                if not post_id:
+                    print(f"\n========== DRY_RUN NEW: {slug} ==========\n{preview}\n========================================\n")
+                    log_event(sb, slug, "NEW", {"dry_run": True, "preview_len": len(fb_text)})
+                else:
+                    print(f"\n====== DRY_RUN PRICE_CHANGED: {slug} ======\n{preview}\n===========================================\n")
+                    log_event(sb, slug, "PRICE_CHANGED", {"dry_run": True, "post_id": post_id, "preview_len": len(fb_text)})
+                continue
 
-        upsert_post(sb, {
-            "slug": slug,
-            "post_id": post_id,
-            "status": "SOLD",
-            "sold_at": now,
-            "last_updated_at": now,
-        })
-        log_event(sb, slug, "SOLD", {"slug": slug})
-
-    # 5) PRICE_CHANGED
-    price_changed: List[str] = []
-    for slug in common_slugs:
-        old = inv_db.get(slug) or {}
-        new = current.get(slug) or {}
-        if (old.get("price_int") is not None) and (new.get("price_int") is not None) and old.get("price_int") != new.get("price_int"):
-            price_changed.append(slug)
-
-    # 6) NEW + PRICE_CHANGED -> generate via text-engine
-    targets: List[Tuple[str, str]] = [(s, "NEW") for s in new_slugs] + [(s, "PRICE_CHANGED") for s in price_changed]
-
-    for slug, event in targets:
-        v = current[slug]
-        vehicle_payload = {
-            "title": v.get("title") or "",
-            "price": f"{v.get('price_int'):,}".replace(",", " ") + " $" if v.get("price_int") else (v.get("price") or ""),
-            "mileage": f"{v.get('km_int'):,}".replace(",", " ") + " km" if v.get("km_int") else (v.get("mileage") or ""),
-            "stock": (v.get("stock") or "").strip().upper(),
-            "vin": (v.get("vin") or "").strip().upper(),
-            "url": v.get("url") or "",
-        }
-
-        fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload)
-
-        post_info = posts_db.get(slug) or {}
-        post_id = post_info.get("post_id")
-
-        photo_urls = v.get("photos") or []
-        photo_paths = download_photos(slug, photo_urls, limit=MAX_PHOTOS)
-       
-        if DRY_RUN:
-            if not post_id:
-                print(f"DRY_RUN: would PUBLISH NEW -> {slug} (photos={len(photo_paths)})")
-                log_event(sb, slug, "NEW", {"dry_run": True, "photos": len(photo_paths)})
-            else:
-                print(f"DRY_RUN: would UPDATE PRICE_CHANGED -> {slug} (post_id={post_id})")
-                log_event(sb, slug, "PRICE_CHANGED", {"dry_run": True, "post_id": post_id})
-            continue
        
         if not post_id:
             main_photos = photo_paths[:POST_PHOTOS]
