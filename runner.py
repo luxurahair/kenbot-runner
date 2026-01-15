@@ -211,7 +211,16 @@ def main() -> None:
 
         photo_urls = v.get("photos") or []
         photo_paths = download_photos(slug, photo_urls, limit=MAX_PHOTOS)
-
+       
+        if DRY_RUN:
+            if not post_id:
+                print(f"DRY_RUN: would PUBLISH NEW -> {slug} (photos={len(photo_paths)})")
+                log_event(sb, slug, "NEW", {"dry_run": True, "photos": len(photo_paths)})
+            else:
+                print(f"DRY_RUN: would UPDATE PRICE_CHANGED -> {slug} (post_id={post_id})")
+                log_event(sb, slug, "PRICE_CHANGED", {"dry_run": True, "post_id": post_id})
+            continue
+       
         if not post_id:
             main_photos = photo_paths[:POST_PHOTOS]
             extra_photos = photo_paths[POST_PHOTOS:MAX_PHOTOS]
