@@ -213,6 +213,15 @@ def main() -> None:
             except Exception:
                 pass
 
+    
+    # 5) PRICE_CHANGED
+    price_changed: List[str] = []
+    for slug in common_slugs:
+        old = inv_db.get(slug) or {}
+        new = current.get(slug) or {}
+        if (old.get("price_int") is not None) and (new.get("price_int") is not None) and old.get("price_int") != new.get("price_int"):
+            price_changed.append(slug)
+
     print(f"OK: NEW={len(new_slugs)} SOLD={len(disappeared_slugs)} PRICE_CHANGED={len(price_changed)}")
 
 if __name__ == "__main__":
