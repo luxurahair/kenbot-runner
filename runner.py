@@ -1,4 +1,5 @@
 import os
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import requests
@@ -42,6 +43,7 @@ FB_TOKEN   = (os.getenv("KENBOT_FB_ACCESS_TOKEN") or os.getenv("FB_PAGE_ACCESS_T
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+STICKERS_BUCKET = os.getenv("SB_BUCKET_STICKERS", "kennebec-stickers").strip()
 
 DRY_RUN = os.getenv("KENBOT_DRY_RUN", "0").strip() == "1"
 FORCE_STOCK = (os.getenv("KENBOT_FORCE_STOCK") or "").strip().upper()
@@ -58,6 +60,84 @@ SESSION.headers.update({
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Safari/605.1.15",
     "Accept-Language": "fr-CA,fr;q=0.9,en;q=0.8",
 })
+
+def _sha256(b: bytes) -> str:
+    return hashlib.sha256(b or b"").hexdigest()
+
+def _is_pdf_ok(b: bytes) -> bool:
+    return bool(b) and len(b) >= 10_240 and b[:4] == b"%PDF"
+
+def _is_stellantis_vin(vin: str) -> bool:
+    vin = (vin or "").strip().upper()
+    if len(vin) != 17:
+        return False
+    # Stellantis fréquents chez toi: 1C/2C/3C + Jeep Italy ZAC + Fiat ZFA
+    return (
+        vin.startswith(("1C", "2C", "3C")) or
+        vin.startswith(("ZAC", "ZFA"))
+    )
+
+def _storage_download_or_none(sb, bucket: str, path: str) -> bytes | None:
+    try:
+        return sb.storage.from_(bucket).download(path)
+    except Exception:
+        return None
+
+def ensure_sticker_cached(sb, vin: str, run_id: str = "") -> dict:
+    """
+    Assure qu'on a un sticker en cache Storage:
+    - pdf_ok/<VIN>.pdf si valide
+    - pdf_bad/<VIN>.pdf si invalide (<10KB ou pas %PDF)
+    Upsert sticker_pdfs (DB).
+    """
+    vin = (vin or "").strip().upper()
+    if len(vin) != 17:
+        return {"vin": vin, "status": "skip", "reason": "vin_invalid"}
+
+    ok_path = f"pdf_ok/{vin}.pdf"
+    bad_path = f"pdf_bad/{vin}.pdf"
+
+    # 1) Déjà en cache OK ?
+    data = _storage_download_or_none(sb, STICKERS_BUCKET, ok_path)
+    if _is_pdf_ok(data or b""):
+        meta = {"vin": vin, "status": "ok", "storage_path": ok_path, "bytes": len(data), "sha256": _sha256(data), "reason": None, "run_id": run_id}
+        sb.table("sticker_pdfs").upsert(meta).execute()
+        return meta
+
+    # 2) Déjà en cache BAD ?
+    data_bad = _storage_download_or_none(sb, STICKERS_BUCKET, bad_path)
+    if data_bad is not None and (len(data_bad) > 0):
+        meta = {"vin": vin, "status": "bad", "storage_path": bad_path, "bytes": len(data_bad), "sha256": _sha256(data_bad), "reason": "cached_bad", "run_id": run_id}
+        sb.table("sticker_pdfs").upsert(meta).execute()
+        return meta
+
+    # 3) Télécharger Chrysler (runner = seul fetcher)
+    pdf_url = f"https://www.chrysler.com/hostd/windowsticker/getWindowStickerPdf.do?vin={vin}"
+    try:
+        r = SESSION.get(pdf_url, timeout=25)
+        blob = r.content or b""
+    except Exception:
+        blob = b""
+
+    if _is_pdf_ok(blob):
+        sb.storage.from_(STICKERS_BUCKET).upload(
+            ok_path,
+            blob,
+            {"content-type": "application/pdf", "upsert": "true"},
+        )
+        meta = {"vin": vin, "status": "ok", "storage_path": ok_path, "bytes": len(blob), "sha256": _sha256(blob), "reason": None, "run_id": run_id}
+        sb.table("sticker_pdfs").upsert(meta).execute()
+        return meta
+
+    # BAD -> upload pour audit (optionnel, mais utile)
+    sb.storage.from_(STICKERS_BUCKET).upload(
+        bad_path,
+        blob or b"x",
+        {"content-type": "application/pdf", "upsert": "true"},
+    )
+    meta = {"vin": vin, "status": "bad", "storage_path": bad_path, "bytes": len(blob or b""), "sha256": _sha256(blob or b""), "reason": "invalid_pdf", "run_id": run_id}
+    sb.table("sticker_pdfs").upsert(meta).execute()
+    return meta
 
 TMP_PHOTOS = Path(os.getenv("KENBOT_TMP_PHOTOS_DIR", "/tmp/kenbot_photos"))
 TMP_PHOTOS.mkdir(parents=True, exist_ok=True)
