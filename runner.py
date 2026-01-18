@@ -108,6 +108,40 @@ def _preview_text(slug: str, event: str, fb_text: str) -> None:
         preview = preview[:900] + "\n... [TRUNCATED]"
     print(f"\n========== DRY_RUN {event}: {slug} ==========\n{preview}\n==============================================\n")
 
+def _clean_km(x):
+    if x is None:
+        return None
+    try:
+        s = str(x).replace(" ", "").replace("\u00a0", "").replace(",", "")
+        km = int(s)
+    except Exception:
+        return None
+    if km <= 0 or km > 500_000:
+        return None
+    return km
+
+def _clean_price_int(x):
+    if x is None:
+        return None
+    try:
+        s = str(x).replace(" ", "").replace("\u00a0", "").replace(",", "").replace("$", "")
+        p = int(s)
+    except Exception:
+        return None
+    if p <= 0 or p > 500_000:
+        return None
+    return p
+
+def _clean_title(t: str) -> str:
+    t = (t or "").strip()
+    low = t.lower()
+    # titres trop génériques = scrap incomplet
+    if low in {"jeep", "dodge", "ram", "chrysler", "fiat", "hyundai", "mazda", "mercedes", "polaris"}:
+        return ""
+    if len(t) < 6:
+        return ""
+    return t
+
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -132,9 +166,10 @@ def main() -> None:
     for url in urls:
         d = parse_vehicle_detail_simple(SESSION, url)
         stock = (d.get("stock") or "").strip().upper()
-        title = (d.get("title") or "").strip()
+        title = _clean_title((d.get("title") or "").strip())
         if not stock or not title:
             continue
+        d["title"] = title
         slug = slugify(title, stock)
         d["slug"] = slug
         current[slug] = d
@@ -217,10 +252,20 @@ def main() -> None:
     for slug, event in targets:
         v = current.get(slug) or {}
 
+        # --- Sanitize data (évite km délirants, prix invalides, titres vides) ---
+        title_clean = _clean_title(v.get("title") or "")
+        if not title_clean:
+            # pas assez d'info fiable -> on skip (sinon annonce ridicule)
+            log_event(sb, slug, "SKIP_BAD_DATA", {"reason": "title_invalid", "raw_title": v.get("title")})
+            continue
+
+        price_int = _clean_price_int(v.get("price_int"))
+        km_int = _clean_km(v.get("km_int"))
+
         vehicle_payload = {
-            "title": v.get("title") or "",
-            "price": f"{v.get('price_int'):,}".replace(",", " ") + " $" if v.get("price_int") else (v.get("price") or ""),
-            "mileage": f"{v.get('km_int'):,}".replace(",", " ") + " km" if v.get("km_int") else (v.get("mileage") or ""),
+            "title": title_clean,
+            "price": (f"{price_int:,}".replace(",", " ") + " $") if price_int else "",
+            "mileage": (f"{km_int:,}".replace(",", " ") + " km") if km_int else "",
             "stock": (v.get("stock") or "").strip().upper(),
             "vin": (v.get("vin") or "").strip().upper(),
             "url": v.get("url") or "",
