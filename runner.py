@@ -351,6 +351,10 @@ def main() -> None:
             "url": v.get("url") or "",
         }
 
+        vin_up = (v.get("vin") or "").strip().upper()
+        if _is_stellantis_vin(vin_up):
+            ensure_sticker_cached(sb, vin_up, run_id=now)
+      
         fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload)
 
         post_info = posts_db.get(slug) or {}
