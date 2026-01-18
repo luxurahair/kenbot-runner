@@ -353,7 +353,10 @@ def main() -> None:
 
         vin_up = (v.get("vin") or "").strip().upper()
         if _is_stellantis_vin(vin_up):
-            ensure_sticker_cached(sb, vin_up, run_id=now)
+            try:
+                ensure_sticker_cached(sb, vin_up, run_id=now)
+            except Exception as e:
+                log_event(sb, slug, "STICKER_CACHE_FAIL", {"vin": vin_up, "err": str(e)})
       
         fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload)
 
