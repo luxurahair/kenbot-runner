@@ -166,29 +166,6 @@ def download_photos(stock: str, urls: List[str], limit: int) -> List[Path]:
             ext = ".png"
         elif ".webp" in low:
             ext = ".webp"
-
-        p = folder / f"{stock}_{i:02d}{ext}"
-        if not p.exists():
-            try:
-                download_photo(u, p)
-            except Exception:
-                continue
-        out.append(p)
-    return out
-
-def download_photos(stock: str, urls: List[str], limit: int) -> List[Path]:
-    out: List[Path] = []
-    stock = (stock or "UNKNOWN").strip().upper()
-    folder = TMP_PHOTOS / stock
-    folder.mkdir(parents=True, exist_ok=True)
-
-    for i, u in enumerate(urls[:limit], start=1):
-        ext = ".jpg"
-        low = (u or "").lower()
-        if ".png" in low:
-            ext = ".png"
-        elif ".webp" in low:
-            ext = ".webp"
         p = folder / f"{stock}_{i:02d}{ext}"
         if not p.exists():
             try:
