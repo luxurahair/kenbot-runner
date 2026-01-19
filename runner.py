@@ -269,23 +269,6 @@ def main() -> None:
     except Exception as e:
         log_event(sb, "RAW_UPLOAD", "RAW_UPLOAD_FAIL", {"err": str(e), "run_id": run_id})
     
-    run_id = _run_id_from_now(now)
-
-    meta = {
-        "run_id": run_id,
-        "base_url": BASE_URL,
-        "inventory_path": INVENTORY_PATH,
-        "pages": pages,
-        "count_urls": len(urls),
-        "dry_run": DRY_RUN,
-        "force_stock": FORCE_STOCK,
-    }
-
-    try:
-        upload_raw_pages(sb, run_id, pages_html, meta)
-    except Exception as e:
-        log_event(sb, "RAW_UPLOAD", "RAW_UPLOAD_FAIL", {"err": str(e), "run_id": run_id})
-   
     # 2) Build current inventory map
     current: Dict[str, Dict[str, Any]] = {}
     for url in urls:
