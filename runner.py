@@ -1,9 +1,11 @@
 import os
+import re
 import hashlib
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+
 import requests
-import time
 from dotenv import load_dotenv
 
 from kennebec_scrape import (
@@ -164,29 +166,6 @@ def download_photos(stock: str, urls: List[str], limit: int) -> List[Path]:
             ext = ".png"
         elif ".webp" in low:
             ext = ".webp"
-
-        p = folder / f"{stock}_{i:02d}{ext}"
-        if not p.exists():
-            try:
-                download_photo(u, p)
-            except Exception:
-                continue
-        out.append(p)
-    return out
-
-def download_photos(stock: str, urls: List[str], limit: int) -> List[Path]:
-    out: List[Path] = []
-    stock = (stock or "UNKNOWN").strip().upper()
-    folder = TMP_PHOTOS / stock
-    folder.mkdir(parents=True, exist_ok=True)
-
-    for i, u in enumerate(urls[:limit], start=1):
-        ext = ".jpg"
-        low = (u or "").lower()
-        if ".png" in low:
-            ext = ".png"
-        elif ".webp" in low:
-            ext = ".webp"
         p = folder / f"{stock}_{i:02d}{ext}"
         if not p.exists():
             try:
@@ -274,11 +253,100 @@ def dealer_footer() -> str:
         "#AutoUsagée #VehiculeOccasion #DanielGiroux"
     )
 
+def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict[str, Dict[str, Any]]:
+    """
+    Scanne les posts Facebook récents et retourne un mapping {STOCK -> {post_id, published_at}}
+    Stock supporté: 06193, 45211A, etc.
+    """
+    posts_map: Dict[str, Dict[str, Any]] = {}
+    fetched = 0
+    after = None
+
+    while fetched < limit:
+        params = {
+            "fields": "id,message,created_time,permalink_url",
+            "limit": 25,
+            "access_token": access_token,
+        }
+        if after:
+            params["after"] = after
+
+        url = f"https://graph.facebook.com/v24.0/{page_id}/posts"
+        r = SESSION.get(url, params=params, timeout=60)
+        j = r.json()
+
+        if not r.ok:
+            raise RuntimeError(f"FB posts fetch failed: {j}")
+
+        data = j.get("data") or []
+        if not data:
+            break
+
+        for item in data:
+            fetched += 1
+
+            msg = (item.get("message") or "").strip()
+            post_id = item.get("id")
+            created = item.get("created_time") or ""
+
+            if not post_id or not msg:
+                continue
+
+            m = re.search(r"\b(\d{5}[A-Za-z]?)\b", msg)
+            stock = (m.group(1).upper() if m else "")
+            if not stock:
+                continue
+
+            posts_map[stock] = {"post_id": post_id, "published_at": created}
+
+            if fetched >= limit:
+                break
+
+        paging = (j.get("paging") or {}).get("cursors") or {}
+        after = paging.get("after")
+        if not after:
+            break
+
+    return posts_map
+
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
     inv_db = get_inventory_map(sb)
     posts_db = get_posts_map(sb)
+
+        # --- REBUILD POSTS MAP (mémoire FB -> Supabase) ---
+    REBUILD = os.getenv("KENBOT_REBUILD_POSTS", "0").strip() == "1"
+    if REBUILD:
+        try:
+            fb_map = rebuild_posts_map(FB_PAGE_ID, FB_TOKEN, limit=300)
+            updated = 0
+
+            # Match stock -> slug via inv_db (DB doit contenir stock)
+            for slug, inv in inv_db.items():
+                stock = (inv.get("stock") or "").strip().upper()
+                if not stock:
+                    continue
+                info = fb_map.get(stock)
+                if not info:
+                    continue
+
+                upsert_post(sb, {
+                    "slug": slug,
+                    "post_id": info["post_id"],
+                    "status": "ACTIVE",
+                    "published_at": info.get("published_at"),
+                    "last_updated_at": utc_now_iso(),
+                })
+                updated += 1
+
+            log_event(sb, "REBUILD_POSTS", "REBUILD_POSTS_OK", {"fb_found": len(fb_map), "updated": updated})
+
+            # refresh map pour SOLD / PRICE_CHANGED
+            posts_db = get_posts_map(sb)
+
+        except Exception as e:
+            log_event(sb, "REBUILD_POSTS", "REBUILD_POSTS_FAIL", {"err": str(e)})
 
     # 1) Fetch listing pages (3 pages, configurable plus tard)
     now = utc_now_iso()
@@ -369,8 +437,8 @@ def main() -> None:
             else:
                 try:
                     update_post_text(post_id, FB_TOKEN, msg)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log_event(sb, slug, "FB_SOLD_UPDATE_FAIL", {"post_id": post_id, "err": str(e)})
 
         upsert_post(sb, {
             "slug": slug,
