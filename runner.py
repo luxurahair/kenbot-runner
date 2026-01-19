@@ -3,6 +3,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import requests
+import time
 from dotenv import load_dotenv
 
 from kennebec_scrape import (
@@ -47,6 +48,8 @@ STICKERS_BUCKET = os.getenv("SB_BUCKET_STICKERS", "kennebec-stickers").strip()
 
 DRY_RUN = os.getenv("KENBOT_DRY_RUN", "0").strip() == "1"
 FORCE_STOCK = (os.getenv("KENBOT_FORCE_STOCK") or "").strip().upper()
+MAX_TARGETS = int(os.getenv("KENBOT_MAX_TARGETS", "4").strip() or "4")
+SLEEP_BETWEEN = int(os.getenv("KENBOT_SLEEP_BETWEEN_POSTS", "60").strip() or "60")
 
 if not FB_PAGE_ID or not FB_TOKEN:
     raise SystemExit("🛑 FB creds manquants: KENBOT_FB_PAGE_ID + KENBOT_FB_ACCESS_TOKEN")
@@ -327,6 +330,11 @@ def main() -> None:
             print(f"FORCE_PREVIEW enabled for stock {FORCE_STOCK} -> {forced_slug}")
         else:
             print(f"FORCE_PREVIEW: stock {FORCE_STOCK} introuvable dans l’inventaire courant")
+            targets = []  # rien à faire
+
+    # Throttle: limiter le nombre d'actions par run (sauf FORCE)
+    if not FORCE_STOCK and MAX_TARGETS > 0:
+        targets = targets[:MAX_TARGETS]
 
     # 7) Process targets
     for slug, event in targets:
@@ -335,7 +343,6 @@ def main() -> None:
         # --- Sanitize data (évite km délirants, prix invalides, titres vides) ---
         title_clean = _clean_title(v.get("title") or "")
         if not title_clean:
-            # pas assez d'info fiable -> on skip (sinon annonce ridicule)
             log_event(sb, slug, "SKIP_BAD_DATA", {"reason": "title_invalid", "raw_title": v.get("title")})
             continue
 
@@ -351,13 +358,14 @@ def main() -> None:
             "url": v.get("url") or "",
         }
 
+        # Cache sticker (ne bloque jamais le run)
         vin_up = (v.get("vin") or "").strip().upper()
         if _is_stellantis_vin(vin_up):
             try:
                 ensure_sticker_cached(sb, vin_up, run_id=now)
             except Exception as e:
                 log_event(sb, slug, "STICKER_CACHE_FAIL", {"vin": vin_up, "err": str(e)})
-      
+
         fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload)
 
         post_info = posts_db.get(slug) or {}
@@ -371,6 +379,8 @@ def main() -> None:
             _preview_text(slug, event, fb_text)
             log_event(sb, slug, event, {"dry_run": True, "photos": len(photo_paths), "post_id": post_id})
             continue
+
+        did_action = False
 
         # Publish NEW (no post_id) or update PRICE_CHANGED (existing post_id)
         if not post_id:
@@ -393,7 +403,8 @@ def main() -> None:
                 "published_at": now,
                 "last_updated_at": now,
             })
-            log_event(sb, slug, "NEW", {"post_id": post_id, "photos": len(photo_paths)})
+            log_event(sb, "NEW", "NEW", {"post_id": post_id, "photos": len(photo_paths)})
+            did_action = True
 
         else:
             try:
@@ -405,8 +416,13 @@ def main() -> None:
                     "last_updated_at": now,
                 })
                 log_event(sb, slug, "PRICE_CHANGED", {"post_id": post_id})
+                did_action = True
             except Exception:
                 pass
+
+        # Throttle: pause après action réelle
+        if did_action and SLEEP_BETWEEN > 0:
+            time.sleep(SLEEP_BETWEEN)
 
     print(f"OK: NEW={len(new_slugs)} SOLD={len(disappeared_slugs)} PRICE_CHANGED={len(price_changed)}")
 
