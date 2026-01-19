@@ -294,7 +294,9 @@ def main() -> None:
         slug = slugify(title, stock)
         d["slug"] = slug
         current[slug] = d
-
+   
+    print("SAMPLES_STOCKS:", sorted({(v.get("stock") or "").strip().upper() for v in current.values()})[:30])
+   
     current_slugs = set(current.keys())
     db_slugs = set(inv_db.keys())
 
