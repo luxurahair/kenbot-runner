@@ -174,19 +174,20 @@ def download_photos(stock: str, urls: List[str], limit: int) -> List[Path]:
         out.append(p)
     return out
 
-def download_photos(slug: str, urls: List[str], limit: int) -> List[Path]:
+def download_photos(stock: str, urls: List[str], limit: int) -> List[Path]:
     out: List[Path] = []
-    folder = TMP_PHOTOS / slug
+    stock = (stock or "UNKNOWN").strip().upper()
+    folder = TMP_PHOTOS / stock
     folder.mkdir(parents=True, exist_ok=True)
 
     for i, u in enumerate(urls[:limit], start=1):
         ext = ".jpg"
-        low = u.lower()
+        low = (u or "").lower()
         if ".png" in low:
             ext = ".png"
         elif ".webp" in low:
             ext = ".webp"
-        p = folder / f"{slug}_{i:02d}{ext}"
+        p = folder / f"{stock}_{i:02d}{ext}"
         if not p.exists():
             try:
                 download_photo(u, p)
@@ -326,10 +327,10 @@ def main() -> None:
         slug = slugify(title, stock)
         d["slug"] = slug
         current[slug] = d
-   
+
     if os.getenv("KENBOT_DEBUG_STOCKS", "0").strip() == "1":
         print("SAMPLES_STOCKS:", sorted({(v.get("stock") or "").strip().upper() for v in current.values()})[:30])
-   
+
     current_slugs = set(current.keys())
     db_slugs = set(inv_db.keys())
 
