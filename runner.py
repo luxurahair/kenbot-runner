@@ -428,7 +428,7 @@ def main() -> None:
                 "published_at": now,
                 "last_updated_at": now,
             })
-            log_event(sb, "NEW", "NEW", {"post_id": post_id, "photos": len(photo_paths)})
+            log_event(sb, slug, "NEW", {"post_id": post_id, "photos": len(photo_paths), "run_id": run_id})
             did_action = True
 
         else:
