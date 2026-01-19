@@ -59,28 +59,49 @@ def comment_on_post(post_id: str, token: str, message: str) -> str:
         raise RuntimeError(f"FB comment error: {j}")
     return j.get("id", "")
 
+def comment_photo(post_id: str, token: str, attachment_id: str, message: str = "") -> str:
+    url = _graph(f"{post_id}/comments")
+    data: Dict[str, str] = {"attachment_id": attachment_id}
+    if message:
+        data["message"] = message
+    resp = requests.post(url, params={"access_token": token}, data=data, timeout=60)
+    j = resp.json()
+    if not resp.ok:
+        raise RuntimeError(f"FB comment photo error: {j}")
+    return j.get("id", "")
+
 def publish_photos_as_comment_batch(page_id: str, token: str, post_id: str, photo_paths: List[Path]) -> None:
     """
-    Best-effort: commentaire "suite photos", puis publish photos (posts photo).
+    Publie les photos extra en commentaires (pas en posts).
     """
     if not photo_paths:
         return
 
+    # Commentaire d'introduction (best-effort)
     try:
         comment_on_post(post_id, token, "📸 Suite des photos 👇")
     except Exception:
         pass
 
+    # Upload en unpublished, puis attache chaque photo au post via commentaire
     for p in photo_paths:
         url = _graph(f"{page_id}/photos")
         with open(p, "rb") as f:
             resp = requests.post(
                 url,
                 params={"access_token": token},
-                data={"caption": ""},
+                data={"published": "false"},
                 files={"source": f},
                 timeout=120,
             )
         j = resp.json()
         if not resp.ok:
-            raise RuntimeError(f"FB publish extra photo error: {j}")
+            raise RuntimeError(f"FB upload extra photo error: {j}")
+
+        mid = j.get("id")
+        if not mid:
+            raise RuntimeError(f"FB upload extra photo missing id: {j}")
+
+        # Attache la photo comme commentaire (PAS un post)
+        comment_photo(post_id, token, attachment_id=mid)
+
