@@ -228,6 +228,20 @@ def _clean_title(t: str) -> str:
         return ""
     return t
 
+def _run_id_from_now(now_iso: str) -> str:
+    """
+    Génère un run_id stable et lisible à partir d'un timestamp ISO (utc_now_iso()).
+    Exemple: 20260118_212530
+    """
+    s = (now_iso or "").strip()
+    # garde seulement chiffres pour être safe (Supabase/storage friendly)
+    digits = "".join(ch for ch in s if ch.isdigit())
+    # ISO typique: YYYYMMDDHHMMSS...
+    if len(digits) >= 14:
+        return f"{digits[0:8]}_{digits[8:14]}"
+    # fallback
+    return f"run_{int(time.time())}"
+
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
