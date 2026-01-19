@@ -1,9 +1,11 @@
 import os
+import re
 import hashlib
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+
 import requests
-import time
 from dotenv import load_dotenv
 
 from kennebec_scrape import (
@@ -274,16 +276,101 @@ def dealer_footer() -> str:
         "#AutoUsagée #VehiculeOccasion #DanielGiroux"
     )
 
+def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> dict:
+    posts_map = {}
+    fetched = 0
+    after = None
+
+    while fetched < limit:
+        params = {
+            "fields": "id,message,created_time,permalink_url",
+            "limit": 25,
+            "access_token": access_token,
+        }
+        if after:
+            params["after"] = after
+
+        url = f"https://graph.facebook.com/v24.0/{page_id}/posts"
+        r = SESSION.get(url, params=params, timeout=60)
+        j = r.json()
+        if not r.ok:
+            raise RuntimeError(f"FB posts fetch failed: {j}")
+
+        data = j.get("data") or []
+        if not data:
+            break
+
+        for item in data:
+            fetched += 1
+            msg = (item.get("message") or "").strip()
+            post_id = item.get("id")
+            created = item.get("created_time") or ""
+            if not post_id:
+                continue
+
+            # Stock: 06193, 45211A, etc.
+            m = re.search(r"\b(\d{5}[A-Za-z]?)\b", msg)
+            stock = (m.group(1).upper() if m else "")
+            if not stock:
+                continue
+
+            posts_map[stock] = {
+                "post_id": post_id,
+                "published_at": created,
+            }
+
+            if fetched >= limit:
+                break
+
+        paging = (j.get("paging") or {}).get("cursors") or {}
+        after = paging.get("after")
+        if not after:
+            break
+
+    return posts_map
+
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
     inv_db = get_inventory_map(sb)
     posts_db = get_posts_map(sb)
 
-    # 1) Fetch listing pages (3 pages, configurable plus tard)
-    now = utc_now_iso()
+    REBUILD = os.getenv("KENBOT_REBUILD_POSTS", "0").strip() == "1"
+
+    if REBUILD:
+        try:
+            fb_map = rebuild_posts_map(FB_PAGE_ID, FB_TOKEN, limit=300)
+            updated = 0
+
+            # Match stock -> slug via inv_db
+            for slug, inv in inv_db.items():
+                stock = (inv.get("stock") or "").strip().upper()
+                if not stock:
+                    continue
+                info = fb_map.get(stock)
+                if not info:
+                    continue
+
+                upsert_post(sb, {
+                    "slug": slug,
+                    "post_id": info["post_id"],
+                    "status": "ACTIVE",
+                    "published_at": info.get("published_at"),
+                    "last_updated_at": utc_now_iso(),
+                })
+                updated += 1
+
+            log_event(sb, "REBUILD_POSTS", "REBUILD_POSTS_OK", {"fb_found": len(fb_map), "updated": updated})
+
+            # refresh posts_db en mémoire pour le reste du run
+            posts_db = get_posts_map(sb)
+
+        except Exception as e:
+            log_event(sb, "REBUILD_POSTS", "REBUILD_POSTS_FAIL", {"err": str(e)})
 
     # 1) Fetch listing pages (3 pages)
+    now = utc_now_iso()
+
     urls: List[str] = []
     pages_html: List[Tuple[int, str]] = []
     pages = [
@@ -297,7 +384,7 @@ def main() -> None:
         urls += parse_inventory_listing_urls(BASE_URL, INVENTORY_PATH, html)
 
     urls = sorted(list(dict.fromkeys(urls)))
-        
+
     run_id = _run_id_from_now(now)
 
     meta = {
@@ -369,8 +456,8 @@ def main() -> None:
             else:
                 try:
                     update_post_text(post_id, FB_TOKEN, msg)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log_event(sb, slug, "FB_SOLD_UPDATE_FAIL", {"post_id": post_id, "err": str(e)})
 
         upsert_post(sb, {
             "slug": slug,
