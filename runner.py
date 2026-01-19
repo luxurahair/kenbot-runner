@@ -44,7 +44,10 @@ FB_TOKEN   = (os.getenv("KENBOT_FB_ACCESS_TOKEN") or os.getenv("FB_PAGE_ACCESS_T
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+
 STICKERS_BUCKET = os.getenv("SB_BUCKET_STICKERS", "kennebec-stickers").strip()
+RAW_BUCKET = os.getenv("SB_BUCKET_RAW", "kennebec-raw").strip()
+OUTPUTS_BUCKET = os.getenv("SB_BUCKET_OUTPUTS", "kennebec-outputs").strip()
 
 DRY_RUN = os.getenv("KENBOT_DRY_RUN", "0").strip() == "1"
 FORCE_STOCK = (os.getenv("KENBOT_FORCE_STOCK") or "").strip().upper()
@@ -232,18 +235,57 @@ def main() -> None:
     posts_db = get_posts_map(sb)
 
     # 1) Fetch listing pages (3 pages, configurable plus tard)
+    now = utc_now_iso()
+
+    # 1) Fetch listing pages (3 pages)
     urls: List[str] = []
+    pages_html: List[Tuple[int, str]] = []
     pages = [
         f"{BASE_URL}{INVENTORY_PATH}",
         f"{BASE_URL}{INVENTORY_PATH}?page=2",
         f"{BASE_URL}{INVENTORY_PATH}?page=3",
     ]
-    for page in pages:
+    for idx, page in enumerate(pages, start=1):
         html = SESSION.get(page, timeout=30).text
+        pages_html.append((idx, html))
         urls += parse_inventory_listing_urls(BASE_URL, INVENTORY_PATH, html)
 
     urls = sorted(list(dict.fromkeys(urls)))
+        
+    run_id = _run_id_from_now(now)
 
+    meta = {
+        "run_id": run_id,
+        "base_url": BASE_URL,
+        "inventory_path": INVENTORY_PATH,
+        "pages": pages,
+        "count_urls": len(urls),
+        "dry_run": DRY_RUN,
+        "force_stock": FORCE_STOCK,
+    }
+
+    try:
+        upload_raw_pages(sb, run_id, pages_html, meta)
+    except Exception as e:
+        log_event(sb, "RAW_UPLOAD", "RAW_UPLOAD_FAIL", {"err": str(e), "run_id": run_id})
+    
+    run_id = _run_id_from_now(now)
+
+    meta = {
+        "run_id": run_id,
+        "base_url": BASE_URL,
+        "inventory_path": INVENTORY_PATH,
+        "pages": pages,
+        "count_urls": len(urls),
+        "dry_run": DRY_RUN,
+        "force_stock": FORCE_STOCK,
+    }
+
+    try:
+        upload_raw_pages(sb, run_id, pages_html, meta)
+    except Exception as e:
+        log_event(sb, "RAW_UPLOAD", "RAW_UPLOAD_FAIL", {"err": str(e), "run_id": run_id})
+   
     # 2) Build current inventory map
     current: Dict[str, Dict[str, Any]] = {}
     for url in urls:
