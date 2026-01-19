@@ -151,10 +151,28 @@ TMP_PHOTOS.mkdir(parents=True, exist_ok=True)
 MAX_PHOTOS = 15
 POST_PHOTOS = 10  # 10 dans le post, 5 extra best-effort
 
-def download_photo(url: str, dest: Path) -> None:
-    r = SESSION.get(url, timeout=60)
-    r.raise_for_status()
-    dest.write_bytes(r.content)
+def download_photos(stock: str, urls: List[str], limit: int) -> List[Path]:
+    out: List[Path] = []
+    stock = (stock or "UNKNOWN").strip().upper()
+    folder = TMP_PHOTOS / stock
+    folder.mkdir(parents=True, exist_ok=True)
+
+    for i, u in enumerate(urls[:limit], start=1):
+        ext = ".jpg"
+        low = (u or "").lower()
+        if ".png" in low:
+            ext = ".png"
+        elif ".webp" in low:
+            ext = ".webp"
+
+        p = folder / f"{stock}_{i:02d}{ext}"
+        if not p.exists():
+            try:
+                download_photo(u, p)
+            except Exception:
+                continue
+        out.append(p)
+    return out
 
 def download_photos(slug: str, urls: List[str], limit: int) -> List[Path]:
     out: List[Path] = []
@@ -241,6 +259,20 @@ def _run_id_from_now(now_iso: str) -> str:
         return f"{digits[0:8]}_{digits[8:14]}"
     return f"run_{int(time.time())}"
 
+def dealer_footer() -> str:
+    return (
+        "\n\n🔁 J’accepte les échanges : 🚗 auto • 🏍️ moto • 🛥️ bateau • 🛻 VTT • 🏁 côte-à-côte\n"
+        "📸 Envoie-moi les photos + infos de ton échange (année / km / paiement restant) → je te reviens vite.\n\n"
+        "👋 Publiée par Daniel Giroux — je réponds vite (pas un robot, promis 😄)\n"
+        "📍 Saint-Georges (Beauce) | Prise de possession rapide possible\n"
+        "📄 Vente commerciale — 2 taxes applicables\n"
+        "✅ Inspection complète — véhicule propre & prêt à partir.\n\n"
+        "📩 Écris-moi en privé — ou texte direct\n"
+        "📞 Daniel Giroux — 418-222-3939\n\n"
+        "#RAM #Truck #Pickup #ProMaster #Cargo #Van #RAM1500 #Beauce #SaintGeorges #Quebec "
+        "#AutoUsagée #VehiculeOccasion #DanielGiroux"
+    )
+
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -295,7 +327,8 @@ def main() -> None:
         d["slug"] = slug
         current[slug] = d
    
-    print("SAMPLES_STOCKS:", sorted({(v.get("stock") or "").strip().upper() for v in current.values()})[:30])
+    if os.getenv("KENBOT_DEBUG_STOCKS", "0").strip() == "1":
+        print("SAMPLES_STOCKS:", sorted({(v.get("stock") or "").strip().upper() for v in current.values()})[:30])
    
     current_slugs = set(current.keys())
     db_slugs = set(inv_db.keys())
@@ -407,12 +440,34 @@ def main() -> None:
                 log_event(sb, slug, "STICKER_CACHE_FAIL", {"vin": vin_up, "err": str(e), "run_id": run_id})
 
         fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload)
+      
+        base = (fb_text or "").rstrip()
 
+        # anti-doublon robuste (si le text-engine ajoute déjà une partie)
+        markers = ["🔁 J’accepte les échanges", "📞 Daniel Giroux", "#DanielGiroux"]
+        if not any(m in base for m in markers):
+            fb_text = base + dealer_footer()
+        else:
+            fb_text = base
+      
         post_info = posts_db.get(slug) or {}
         post_id = post_info.get("post_id")
 
         photo_urls = v.get("photos") or []
-        photo_paths = download_photos(slug, photo_urls, limit=MAX_PHOTOS)
+
+        # filtre anti-bannières/promo (crédit-bail, inspectés, etc.)
+        bad_kw = (
+            "credit", "crédit", "bail", "commercial",
+            "inspect", "inspecte", "inspecté", "inspection",
+            "garantie", "warranty",
+            "finance", "financement",
+            "promo", "promotion",
+            "banner", "banniere", "bannière",
+        )
+        photo_urls = [u for u in photo_urls if u and not any(k in u.lower() for k in bad_kw)]
+
+        stock_up = (v.get("stock") or "").strip().upper()
+        photo_paths = download_photos(stock_up, photo_urls, limit=MAX_PHOTOS)
 
         # DRY_RUN: print preview + log event, no FB writes
         if DRY_RUN:
