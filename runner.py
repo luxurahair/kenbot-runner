@@ -216,6 +216,7 @@ def _clean_price_int(x):
         return None
     return p
 
+
 def _clean_title(t: str) -> str:
     t = (t or "").strip()
     low = t.lower()
@@ -226,18 +227,18 @@ def _clean_title(t: str) -> str:
         return ""
     return t
 
+
 def _run_id_from_now(now_iso: str) -> str:
     """
     Génère un run_id stable et lisible à partir d'un timestamp ISO (utc_now_iso()).
     Exemple: 20260118_212530
     """
     s = (now_iso or "").strip()
-    # garde seulement chiffres pour être safe (Supabase/storage friendly)
     digits = "".join(ch for ch in s if ch.isdigit())
-    # ISO typique: YYYYMMDDHHMMSS...
     if len(digits) >= 14:
         return f"{digits[0:8]}_{digits[8:14]}"
     return f"run_{int(time.time())}"
+
 
 def dealer_footer() -> str:
     return (
@@ -252,6 +253,7 @@ def dealer_footer() -> str:
         "#RAM #Truck #Pickup #ProMaster #Cargo #Van #RAM1500 #Beauce #SaintGeorges #Quebec "
         "#AutoUsagée #VehiculeOccasion #DanielGiroux"
     )
+
 
 def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict[str, Dict[str, Any]]:
     """
@@ -309,20 +311,20 @@ def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict
 
     return posts_map
 
+
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
     inv_db = get_inventory_map(sb)
     posts_db = get_posts_map(sb)
 
-        # --- REBUILD POSTS MAP (mémoire FB -> Supabase) ---
+    # --- REBUILD POSTS MAP (mémoire FB -> Supabase) ---
     REBUILD = os.getenv("KENBOT_REBUILD_POSTS", "0").strip() == "1"
     if REBUILD:
         try:
             fb_map = rebuild_posts_map(FB_PAGE_ID, FB_TOKEN, limit=300)
             updated = 0
 
-            # Match stock -> slug via inv_db (DB doit contenir stock)
             for slug, inv in inv_db.items():
                 stock = (inv.get("stock") or "").strip().upper()
                 if not stock:
@@ -348,10 +350,9 @@ def main() -> None:
         except Exception as e:
             log_event(sb, "REBUILD_POSTS", "REBUILD_POSTS_FAIL", {"err": str(e)})
 
-    # 1) Fetch listing pages (3 pages, configurable plus tard)
+    # 1) Fetch listing pages (3 pages)
     now = utc_now_iso()
 
-    # 1) Fetch listing pages (3 pages)
     urls: List[str] = []
     pages_html: List[Tuple[int, str]] = []
     pages = [
@@ -365,7 +366,7 @@ def main() -> None:
         urls += parse_inventory_listing_urls(BASE_URL, INVENTORY_PATH, html)
 
     urls = sorted(list(dict.fromkeys(urls)))
-        
+
     run_id = _run_id_from_now(now)
 
     meta = {
@@ -382,7 +383,7 @@ def main() -> None:
         upload_raw_pages(sb, run_id, pages_html, meta)
     except Exception as e:
         log_event(sb, "RAW_UPLOAD", "RAW_UPLOAD_FAIL", {"err": str(e), "run_id": run_id})
-    
+
     # 2) Build current inventory map
     current: Dict[str, Dict[str, Any]] = {}
     for url in urls:
@@ -395,9 +396,6 @@ def main() -> None:
         slug = slugify(title, stock)
         d["slug"] = slug
         current[slug] = d
-
-    if os.getenv("KENBOT_DEBUG_STOCKS", "0").strip() == "1":
-        print("SAMPLES_STOCKS:", sorted({(v.get("stock") or "").strip().upper() for v in current.values()})[:30])
 
     current_slugs = set(current.keys())
     db_slugs = set(inv_db.keys())
@@ -457,8 +455,12 @@ def main() -> None:
         if (old.get("price_int") is not None) and (new.get("price_int") is not None) and old.get("price_int") != new.get("price_int"):
             price_changed.append(slug)
 
+    # DEBUG: voir la réalité (sinon tu cherches dans le vide)
+    log_event(sb, "DIFF", "DIFF_COUNTS", {"new": len(new_slugs), "sold": len(disappeared_slugs), "price_changed": len(price_changed)})
+
     # 6) Targets NEW + PRICE_CHANGED
-    targets: List[Tuple[str, str]] = [(s, "NEW") for s in new_slugs] + [(s, "PRICE_CHANGED") for s in price_changed]
+    # IMPORTANT: on priorise PRICE_CHANGED (sinon MAX_TARGETS coupe tout et tu ne le vois jamais)
+    targets: List[Tuple[str, str]] = [(s, "PRICE_CHANGED") for s in price_changed] + [(s, "NEW") for s in new_slugs]
 
     # FORCE_PREVIEW by stock
     if FORCE_STOCK:
@@ -472,7 +474,7 @@ def main() -> None:
             print(f"FORCE_PREVIEW enabled for stock {FORCE_STOCK} -> {forced_slug}")
         else:
             print(f"FORCE_PREVIEW: stock {FORCE_STOCK} introuvable dans l’inventaire courant")
-            targets = []  # rien à faire
+            targets = []
 
     # Throttle: limiter le nombre d'actions par run (sauf FORCE)
     if not FORCE_STOCK and MAX_TARGETS > 0:
@@ -482,7 +484,6 @@ def main() -> None:
     for slug, event in targets:
         v = current.get(slug) or {}
 
-        # --- Sanitize data (évite km délirants, prix invalides, titres vides) ---
         title_clean = _clean_title(v.get("title") or "")
         if not title_clean:
             log_event(sb, slug, "SKIP_BAD_DATA", {"reason": "title_invalid", "raw_title": v.get("title")})
@@ -500,7 +501,6 @@ def main() -> None:
             "url": v.get("url") or "",
         }
 
-        # Cache sticker (ne bloque jamais le run)
         vin_up = (v.get("vin") or "").strip().upper()
         if _is_stellantis_vin(vin_up):
             try:
@@ -509,22 +509,23 @@ def main() -> None:
                 log_event(sb, slug, "STICKER_CACHE_FAIL", {"vin": vin_up, "err": str(e), "run_id": run_id})
 
         fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload)
-      
-        base = (fb_text or "").rstrip()
 
-        # anti-doublon robuste (si le text-engine ajoute déjà une partie)
+        base = (fb_text or "").rstrip()
         markers = ["🔁 J’accepte les échanges", "📞 Daniel Giroux", "#DanielGiroux"]
         if not any(m in base for m in markers):
             fb_text = base + dealer_footer()
         else:
             fb_text = base
-      
+
         post_info = posts_db.get(slug) or {}
         post_id = post_info.get("post_id")
 
-        photo_urls = v.get("photos") or []
+        # IMPORTANT: si PRICE_CHANGED mais pas de post_id -> on SKIP (sinon duplicats)
+        if event == "PRICE_CHANGED" and not post_id:
+            log_event(sb, slug, "PRICE_CHANGED_SKIP_NO_POST_ID", {"reason": "missing_post_id"})
+            continue
 
-        # filtre anti-bannières/promo (crédit-bail, inspectés, etc.)
+        photo_urls = v.get("photos") or []
         bad_kw = (
             "credit", "crédit", "bail", "commercial",
             "inspect", "inspecte", "inspecté", "inspection",
@@ -538,7 +539,6 @@ def main() -> None:
         stock_up = (v.get("stock") or "").strip().upper()
         photo_paths = download_photos(stock_up, photo_urls, limit=MAX_PHOTOS)
 
-        # DRY_RUN: print preview + log event, no FB writes
         if DRY_RUN:
             _preview_text(slug, event, fb_text)
             log_event(sb, slug, event, {"dry_run": True, "photos": len(photo_paths), "post_id": post_id})
@@ -546,8 +546,8 @@ def main() -> None:
 
         did_action = False
 
-        # Publish NEW (no post_id) or update PRICE_CHANGED (existing post_id)
         if not post_id:
+            # NEW
             main_photos = photo_paths[:POST_PHOTOS]
             extra_photos = photo_paths[POST_PHOTOS:MAX_PHOTOS]
 
@@ -557,8 +557,8 @@ def main() -> None:
             if extra_photos:
                 try:
                     publish_photos_as_comment_batch(FB_PAGE_ID, FB_TOKEN, post_id, extra_photos)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log_event(sb, slug, "FB_EXTRA_PHOTOS_FAIL", {"post_id": post_id, "err": str(e)})
 
             upsert_post(sb, {
                 "slug": slug,
@@ -571,6 +571,7 @@ def main() -> None:
             did_action = True
 
         else:
+            # PRICE_CHANGED (ou FORCE_PREVIEW si tu passes ici avec post_id)
             try:
                 update_post_text(post_id, FB_TOKEN, fb_text)
                 upsert_post(sb, {
@@ -579,12 +580,11 @@ def main() -> None:
                     "status": "ACTIVE",
                     "last_updated_at": now,
                 })
-                log_event(sb, slug, "PRICE_CHANGED", {"post_id": post_id})
+                log_event(sb, slug, event, {"post_id": post_id})
                 did_action = True
-            except Exception:
-                pass
+            except Exception as e:
+                log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "event": event})
 
-        # Throttle: pause après action réelle
         if did_action and SLEEP_BETWEEN > 0:
             time.sleep(SLEEP_BETWEEN)
 
