@@ -234,12 +234,18 @@ def _run_id_from_now(now_iso: str) -> str:
     Exemple: 20260118_212530
     """
     s = (now_iso or "").strip()
+<<<<<<< HEAD
     # garde seulement chiffres pour être safe (Supabase/storage friendly)
     digits = "".join(ch for ch in s if ch.isdigit())
     # ISO typique: YYYYMMDDHHMMSS...
     if len(digits) >= 14:
         return f"{digits[0:8]}_{digits[8:14]}"
     # fallback
+=======
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if len(digits) >= 14:
+        return f"{digits[0:8]}_{digits[8:14]}"
+>>>>>>> 39d5500 (Add missing _run_id_from_now helper)
     return f"run_{int(time.time())}"
 
 def main() -> None:
