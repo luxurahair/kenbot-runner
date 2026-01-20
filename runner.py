@@ -388,6 +388,112 @@ def upload_raw_pages(sb, run_id: str, pages_html: List[Tuple[int, str]], meta: D
             {"content-type": "text/html; charset=utf-8", "upsert": "true"},
         )
 
+def _process_price_changed_for_api() -> Dict[str, Any]:
+    """
+    API helper: applique PRICE_CHANGED sur les posts existants.
+    Retourne un résumé.
+    """
+    sb = get_client(SUPABASE_URL, SUPABASE_KEY)
+
+    inv_db = get_inventory_map(sb)
+    posts_db = get_posts_map(sb)
+
+    # Scrape 3 pages (même logique que main)
+    pages = [
+        f"{BASE_URL}{INVENTORY_PATH}",
+        f"{BASE_URL}{INVENTORY_PATH}?page=2",
+        f"{BASE_URL}{INVENTORY_PATH}?page=3",
+    ]
+
+    urls: List[str] = []
+    for page in pages:
+        html = SESSION.get(page, timeout=30).text
+        urls += parse_inventory_listing_urls(BASE_URL, INVENTORY_PATH, html)
+
+    urls = sorted(list(dict.fromkeys(urls)))
+
+    current: Dict[str, Dict[str, Any]] = {}
+    for url in urls:
+        d = parse_vehicle_detail_simple(SESSION, url)
+        stock = (d.get("stock") or "").strip().upper()
+        title = _clean_title((d.get("title") or "").strip())
+        if not stock or not title:
+            continue
+        d["title"] = title
+        slug = slugify(title, stock)
+        d["slug"] = slug
+        current[slug] = d
+
+    current_slugs = set(current.keys())
+    db_slugs = set(inv_db.keys())
+    common_slugs = sorted(current_slugs & db_slugs)
+
+    # calc price_changed
+    price_changed: List[str] = []
+    for slug in common_slugs:
+        old = inv_db.get(slug) or {}
+        new = current.get(slug) or {}
+        if (old.get("price_int") is not None) and (new.get("price_int") is not None) and old.get("price_int") != new.get("price_int"):
+            price_changed.append(slug)
+
+    updated = 0
+    skipped_no_post_id = 0
+    failed = 0
+
+    now = utc_now_iso()
+
+    for slug in price_changed:
+        post = posts_db.get(slug) or {}
+        post_id = post.get("post_id")
+        if not post_id:
+            skipped_no_post_id += 1
+            continue
+
+        v = current.get(slug) or {}
+        title_clean = _clean_title(v.get("title") or "")
+        vehicle_payload = {
+            "title": title_clean,
+            "price": "",
+            "mileage": "",
+            "stock": (v.get("stock") or "").strip().upper(),
+            "vin": (v.get("vin") or "").strip().upper(),
+            "url": v.get("url") or "",
+        }
+
+        fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event="PRICE_CHANGED", vehicle=vehicle_payload) or ""
+        base = fb_text.rstrip()
+        markers = ["🔁 J’accepte les échanges", "📞 Daniel Giroux", "#DanielGiroux"]
+        if not any(m in base for m in markers):
+            fb_text = base + dealer_footer()
+        else:
+            fb_text = base
+
+        try:
+            if DRY_RUN:
+                pass
+            else:
+                update_post_text(post_id, FB_TOKEN, fb_text)
+
+            upsert_post(sb, {
+                "slug": slug,
+                "post_id": post_id,
+                "status": "ACTIVE",
+                "last_updated_at": now,
+                "base_text": fb_text,
+            })
+            updated += 1
+
+        except Exception as e:
+            failed += 1
+            log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "event": "PRICE_CHANGED"})
+
+    return {
+        "price_changed": len(price_changed),
+        "updated": updated,
+        "skipped_no_post_id": skipped_no_post_id,
+        "failed": failed,
+    }
+
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
