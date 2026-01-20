@@ -357,9 +357,6 @@ def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict
 
     return posts_map
 
-print("BOOT_OK", utc_now_iso(), "RAW_BUCKET=", RAW_BUCKET)
-log_event(sb, "BOOT", "BOOT_OK", {"ts": utc_now_iso(), "raw_bucket": RAW_BUCKET})
-
 import json
 
 def upload_raw_pages(sb, run_id: str, pages_html: List[Tuple[int, str]], meta: Dict[str, Any]) -> None:
@@ -394,6 +391,9 @@ def upload_raw_pages(sb, run_id: str, pages_html: List[Tuple[int, str]], meta: D
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
+    print("BOOT_OK", utc_now_iso(), "RAW_BUCKET=", RAW_BUCKET)
+    log_event(sb, "BOOT", "BOOT_OK", {"ts": utc_now_iso(), "raw_bucket": RAW_BUCKET})
+  
     inv_db = get_inventory_map(sb)
     posts_db = get_posts_map(sb)
 
@@ -713,7 +713,7 @@ def main() -> None:
                 try:
                     publish_photos_as_comment_batch(FB_PAGE_ID, FB_TOKEN, post_id, extra_photos)
                 except Exception as e:
-                    log_event(sb, slug, "FB_EXTRA_PHOTOS_FAIL", {"post_id": post_id, "err": str(e)})
+                    log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "event": event})
 
             # ✅ upsert + base_text doivent être DANS le NEW
             upsert_post(sb, {
@@ -740,9 +740,6 @@ def main() -> None:
                     "base_text": fb_text,
                 })
                 log_event(sb, slug, event, {"post_id": post_id})
-                did_action = True
-            except Exception as e:
-                log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "event": event})
                 did_action = True
             except Exception as e:
                 log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "event": event})
