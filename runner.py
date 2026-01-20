@@ -470,12 +470,6 @@ def main() -> None:
             "bucket": RAW_BUCKET,
         })
 
-    try:
-        upload_raw_pages(sb, run_id, pages_html, meta)
-    except Exception as e:
-        log_event(sb, "RAW_UPLOAD", "RAW_UPLOAD_FAIL", {"err": str(e), "run_id": run_id})
-
-    # 2) Build current inventory map
     current: Dict[str, Dict[str, Any]] = {}
     for url in urls:
         d = parse_vehicle_detail_simple(SESSION, url)
