@@ -460,6 +460,16 @@ def main() -> None:
         "force_stock": FORCE_STOCK,
     }
 
+    # RAW audit: upload des 3 pages Kennebec
+    try:
+        upload_raw_pages(sb, run_id, pages_html, meta)
+    except Exception as e:
+        log_event(sb, "RAW_UPLOAD", "RAW_UPLOAD_FAIL", {
+            "err": str(e),
+            "run_id": run_id,
+            "bucket": RAW_BUCKET,
+        })
+
     try:
         upload_raw_pages(sb, run_id, pages_html, meta)
     except Exception as e:
