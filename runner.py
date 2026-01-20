@@ -300,6 +300,7 @@ def make_sold_message(base_text: str) -> str:
     if not base:
         base = "(Détails du véhicule indisponibles — contactez-moi et je vous aide à trouver l’équivalent.)"
     return sold_prefix() + base
+
 def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict[str, Dict[str, Any]]:
     """
     Scanne les posts Facebook récents et retourne un mapping {STOCK -> {post_id, published_at}}
@@ -356,6 +357,8 @@ def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict
 
     return posts_map
 
+print("BOOT_OK", utc_now_iso(), "RAW_BUCKET=", RAW_BUCKET)
+log_event(sb, "BOOT", "BOOT_OK", {"ts": utc_now_iso(), "raw_bucket": RAW_BUCKET})
 
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
