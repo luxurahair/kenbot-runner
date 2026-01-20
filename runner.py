@@ -318,6 +318,8 @@ def main() -> None:
     inv_db = get_inventory_map(sb)
     posts_db = get_posts_map(sb)
 
+    log_event(sb, "ENV", "ENV_REBUILD", {"KENBOT_REBUILD_POSTS": os.getenv("KENBOT_REBUILD_POSTS")})
+
     # --- REBUILD POSTS MAP (mémoire FB -> Supabase) ---
     REBUILD = os.getenv("KENBOT_REBUILD_POSTS", "0").strip() == "1"
     if REBUILD:
