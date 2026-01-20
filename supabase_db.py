@@ -5,6 +5,13 @@ from datetime import datetime, timezone
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+def read_json_from_storage(sb, bucket: str, path: str) -> dict:
+    res = sb.storage.from_(bucket).download(path)
+    if not res:
+        return {}
+    import json
+    return json.loads(res.decode("utf-8"))
+
 def get_client(url: str, key: str) -> Client:
     if not url or not key:
         raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY manquants.")
