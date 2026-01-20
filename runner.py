@@ -28,8 +28,9 @@ from supabase_db import (
     upsert_post,
     log_event,
     utc_now_iso,
+    read_json_from_storage,
+    get_latest_snapshot_run_id,
 )
-
 # Load env (local dev only; on Render, env vars are injected)
 for name in (".env.local", ".kenbot_env", ".env"):
     p = Path(name)
@@ -391,14 +392,15 @@ def upload_raw_pages(sb, run_id: str, pages_html: List[Tuple[int, str]], meta: D
 def _process_price_changed_for_api() -> Dict[str, Any]:
     """
     API helper: applique PRICE_CHANGED sur les posts existants.
+    PRICE_CHANGED est déterminé par comparaison:
+      Kennebec (scrape courant) vs Facebook snapshot (index_by_stock.json)
     Retourne un résumé.
     """
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
-    inv_db = get_inventory_map(sb)
     posts_db = get_posts_map(sb)
 
-    # Scrape 3 pages (même logique que main)
+    # ---- 1) Scrape Kennebec (même logique que main)
     pages = [
         f"{BASE_URL}{INVENTORY_PATH}",
         f"{BASE_URL}{INVENTORY_PATH}?page=2",
@@ -413,6 +415,8 @@ def _process_price_changed_for_api() -> Dict[str, Any]:
     urls = sorted(list(dict.fromkeys(urls)))
 
     current: Dict[str, Dict[str, Any]] = {}
+    current_by_stock: Dict[str, str] = {}
+
     for url in urls:
         d = parse_vehicle_detail_simple(SESSION, url)
         stock = (d.get("stock") or "").strip().upper()
@@ -423,18 +427,33 @@ def _process_price_changed_for_api() -> Dict[str, Any]:
         slug = slugify(title, stock)
         d["slug"] = slug
         current[slug] = d
+        current_by_stock[stock] = slug
 
-    current_slugs = set(current.keys())
-    db_slugs = set(inv_db.keys())
-    common_slugs = sorted(current_slugs & db_slugs)
+    kb_stocks = set(current_by_stock.keys())
 
-    # calc price_changed
+    # ---- 2) Lire le dernier snapshot Facebook (facture)
+    SNAP_BUCKET = "kennebec-facebook-snapshots"
+    snap_run = get_latest_snapshot_run_id(sb, SNAP_BUCKET)
+
+    fb_index = (
+        read_json_from_storage(sb, SNAP_BUCKET, f"runs/{snap_run}/index_by_stock.json")
+        if snap_run else {}
+    )
+
+    fb_stocks = set((fb_index or {}).keys())
+
+    # ---- 3) Calcul PRICE_CHANGED (stock commun + prix différent)
+    # NOTE: fb_index[stock]["price_int"] est best-effort, donc on protège.
     price_changed: List[str] = []
-    for slug in common_slugs:
-        old = inv_db.get(slug) or {}
-        new = current.get(slug) or {}
-        if (old.get("price_int") is not None) and (new.get("price_int") is not None) and old.get("price_int") != new.get("price_int"):
-            price_changed.append(slug)
+    for stock in (kb_stocks & fb_stocks):
+        kb_slug = current_by_stock[stock]
+        kb_price = (current.get(kb_slug) or {}).get("price_int")
+        fb_price = (fb_index.get(stock) or {}).get("price_int")
+        if (kb_price is not None) and (fb_price is not None) and (kb_price != fb_price):
+            price_changed.append(kb_slug)
+
+    # dédup / stable
+    price_changed = sorted(list(dict.fromkeys(price_changed)))
 
     updated = 0
     skipped_no_post_id = 0
@@ -460,7 +479,13 @@ def _process_price_changed_for_api() -> Dict[str, Any]:
             "url": v.get("url") or "",
         }
 
-        fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event="PRICE_CHANGED", vehicle=vehicle_payload) or ""
+        fb_text = generate_facebook_text(
+            TEXT_ENGINE_URL,
+            slug=slug,
+            event="PRICE_CHANGED",
+            vehicle=vehicle_payload
+        ) or ""
+
         base = fb_text.rstrip()
         markers = ["🔁 J’accepte les échanges", "📞 Daniel Giroux", "#DanielGiroux"]
         if not any(m in base for m in markers):
@@ -469,13 +494,12 @@ def _process_price_changed_for_api() -> Dict[str, Any]:
             fb_text = base
 
         try:
-            if DRY_RUN:
-                pass
-            else:
+            if not DRY_RUN:
                 update_post_text(post_id, FB_TOKEN, fb_text)
 
             upsert_post(sb, {
                 "slug": slug,
+                "stock": (v.get("stock") or "").strip().upper(),  # IMPORTANT
                 "post_id": post_id,
                 "status": "ACTIVE",
                 "last_updated_at": now,
@@ -488,6 +512,7 @@ def _process_price_changed_for_api() -> Dict[str, Any]:
             log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "event": "PRICE_CHANGED"})
 
     return {
+        "snapshot_run": snap_run,
         "price_changed": len(price_changed),
         "updated": updated,
         "skipped_no_post_id": skipped_no_post_id,
