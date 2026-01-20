@@ -533,13 +533,26 @@ def main() -> None:
 
     log_event(sb, "ENV", "ENV_REBUILD", {"KENBOT_REBUILD_POSTS": os.getenv("KENBOT_REBUILD_POSTS")})
 
-    # ---- REBUILD POSTS MAP (mémoire FB -> Supabase)
+    # ---- REBUILD POSTS MAP (mémoire FB -> Supabase) + SNAPSHOT STORAGE
     REBUILD = os.getenv("KENBOT_REBUILD_POSTS", "0").strip() == "1"
     if REBUILD:
         try:
             fb_map = rebuild_posts_map(FB_PAGE_ID, FB_TOKEN, limit=300)
-            updated = 0
 
+            # ---- SNAPSHOT FACEBOOK -> STORAGE (FACTURE)
+            SNAP_BUCKET = "kennebec-facebook-snapshots"
+            snap_run_id = utc_now_iso().replace(":", "").replace("-", "").split(".")[0]
+
+            sb.storage.from_(SNAP_BUCKET).upload(
+                f"runs/{snap_run_id}/fb_map_by_stock.json",
+                json.dumps(fb_map, ensure_ascii=False, indent=2).encode("utf-8"),
+                file_options={"content-type": "application/json", "upsert": "true"},
+            )
+
+            print(f"✅ FB SNAPSHOT OK → runs/{snap_run_id}/fb_map_by_stock.json ({len(fb_map)} stocks)")
+
+            # ---- upsert posts (mémoire) en DB
+            updated = 0
             for slug, inv in inv_db.items():
                 stock = (inv.get("stock") or "").strip().upper()
                 if not stock:
@@ -551,7 +564,7 @@ def main() -> None:
 
                 upsert_post(sb, {
                     "slug": slug,
-                    "stock": stock,                 # ✅ IMPORTANT
+                    "stock": stock,  # ✅ IMPORTANT
                     "post_id": info["post_id"],
                     "status": "ACTIVE",
                     "published_at": info.get("published_at"),
@@ -559,7 +572,11 @@ def main() -> None:
                 })
                 updated += 1
 
-            log_event(sb, "REBUILD_POSTS", "REBUILD_POSTS_OK", {"fb_found": len(fb_map), "updated": updated})
+            log_event(sb, "REBUILD_POSTS", "REBUILD_POSTS_OK", {
+                "fb_found": len(fb_map),
+                "updated": updated,
+                "snapshot_path": f"runs/{snap_run_id}/fb_map_by_stock.json"
+            })
 
             # refresh map pour SOLD / PRICE_CHANGED
             posts_db = get_posts_map(sb)
