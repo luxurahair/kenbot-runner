@@ -255,6 +255,51 @@ def dealer_footer() -> str:
     )
 
 
+SOLD_BANNER_TITLE = "🚨 VENDU 🚨"
+SOLD_BANNER_BAR = "────────────────────"
+
+def strip_sold_banner(txt: str) -> str:
+    """
+    Retire NOTRE bandeau VENDU si le texte commence par lui.
+    On conserve 100% du contenu original.
+    """
+    t = (txt or "").lstrip()
+    if not t:
+        return ""
+
+    if not t.startswith(SOLD_BANNER_TITLE):
+        return t
+
+    lines = t.splitlines()
+    out: List[str] = []
+    cutting = True
+    # On coupe tout jusqu'à la ligne de séparation (incluse)
+    for line in lines:
+        if cutting:
+            if SOLD_BANNER_BAR in line:
+                cutting = False
+            continue
+        out.append(line)
+
+    return ("\n".join(out)).lstrip()
+
+
+def fetch_fb_post_message(post_id: str, token: str) -> str:
+    """
+    Lit le message actuel sur Facebook (pour capturer le texte original si base_text vide).
+    """
+    url = f"https://graph.facebook.com/v24.0/{post_id}"
+    r = SESSION.get(url, params={"fields": "message", "access_token": token}, timeout=30)
+    j = r.json()
+    if not r.ok:
+        raise RuntimeError(f"FB get post message error: {j}")
+    return (j.get("message") or "").strip()
+
+def make_sold_message(base_text: str) -> str:
+    base = strip_sold_banner(base_text).strip()
+    if not base:
+        base = "(Détails du véhicule indisponibles — contactez-moi et je vous aide à trouver l’équivalent.)"
+    return sold_prefix() + base
 def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict[str, Dict[str, Any]]:
     """
     Scanne les posts Facebook récents et retourne un mapping {STOCK -> {post_id, published_at}}
@@ -407,7 +452,57 @@ def main() -> None:
     common_slugs = sorted(current_slugs & db_slugs)
 
     now = utc_now_iso()
+    
+    # RESTORE: si un véhicule réapparait sur Kennebec mais le post FB est marqué SOLD, on remet le texte original
+    for slug in common_slugs:
+        post = posts_db.get(slug) or {}
+        if (post.get("status") or "").upper() != "SOLD":
+            continue
 
+        post_id = post.get("post_id")
+        if not post_id:
+            continue
+
+        base_text = (post.get("base_text") or "").strip()
+
+        # Si on n'a pas encore base_text, on régénère (mieux que rien)
+        if not base_text:
+            v = current.get(slug) or {}
+            title_clean = _clean_title(v.get("title") or "")
+            vehicle_payload = {
+                "title": title_clean,
+                "price": "",
+                "mileage": "",
+                "stock": (v.get("stock") or "").strip().upper(),
+                "vin": (v.get("vin") or "").strip().upper(),
+                "url": v.get("url") or "",
+            }
+            base_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event="RESTORE_ACTIVE", vehicle=vehicle_payload) or ""
+            base_text = (base_text or "").rstrip()
+            markers = ["🔁 J’accepte les échanges", "📞 Daniel Giroux", "#DanielGiroux"]
+            if not any(m in base_text for m in markers):
+                base_text = base_text + dealer_footer()
+
+        base_text = strip_sold_banner(base_text)
+
+        if DRY_RUN:
+            log_event(sb, slug, "RESTORE_DRY_RUN", {"post_id": post_id})
+        else:
+            try:
+                update_post_text(post_id, FB_TOKEN, base_text)
+            except Exception as e:
+                log_event(sb, slug, "FB_RESTORE_FAIL", {"post_id": post_id, "err": str(e)})
+
+        upsert_post(sb, {
+            "slug": slug,
+            "post_id": post_id,
+            "status": "ACTIVE",
+            "sold_at": None,
+            "last_updated_at": utc_now_iso(),
+            "base_text": base_text,
+        })
+        log_event(sb, slug, "RESTORED_ACTIVE", {"post_id": post_id})
+    
     # 3) Upsert inventory rows ACTIVE
     rows = []
     for slug, v in current.items():
@@ -431,12 +526,32 @@ def main() -> None:
         post_id = post.get("post_id")
 
         if post_id and str(post.get("status", "")).upper() != "SOLD":
-            msg = sold_prefix() + "Ce véhicule est vendu."
             if DRY_RUN:
                 print(f"DRY_RUN: would MARK SOLD -> {slug} (post_id={post_id})")
             else:
                 try:
+                    # 1) récupérer base_text (texte original) si on l'a
+                    base_text = (post.get("base_text") or "").strip()
+
+                    # 2) si pas de base_text (vieux posts), on lit le message FB actuel et on le sauve
+                    if not base_text:
+                        fb_current = fetch_fb_post_message(post_id, FB_TOKEN)
+                        base_text = strip_sold_banner(fb_current)
+
+                    # 3) on compose le message VENDU = bandeau + texte original
+                    msg = make_sold_message(base_text)
+
+                    # 4) update FB
                     update_post_text(post_id, FB_TOKEN, msg)
+
+                    # 5) sauver le texte original en DB pour pouvoir RESTORE plus tard
+                    upsert_post(sb, {
+                        "slug": slug,
+                        "post_id": post_id,
+                        "base_text": base_text,
+                        "last_updated_at": utc_now_iso(),
+                    })
+
                 except Exception as e:
                     log_event(sb, slug, "FB_SOLD_UPDATE_FAIL", {"post_id": post_id, "err": str(e)})
 
@@ -562,13 +677,16 @@ def main() -> None:
                 except Exception as e:
                     log_event(sb, slug, "FB_EXTRA_PHOTOS_FAIL", {"post_id": post_id, "err": str(e)})
 
+            # ✅ upsert + base_text doivent être DANS le NEW
             upsert_post(sb, {
                 "slug": slug,
                 "post_id": post_id,
                 "status": "ACTIVE",
                 "published_at": now,
                 "last_updated_at": now,
+                "base_text": fb_text,
             })
+
             log_event(sb, slug, "NEW", {"post_id": post_id, "photos": len(photo_paths), "run_id": run_id})
             did_action = True
 
@@ -581,8 +699,12 @@ def main() -> None:
                     "post_id": post_id,
                     "status": "ACTIVE",
                     "last_updated_at": now,
+                    "base_text": fb_text,
                 })
                 log_event(sb, slug, event, {"post_id": post_id})
+                did_action = True
+            except Exception as e:
+                log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "event": event})
                 did_action = True
             except Exception as e:
                 log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "event": event})
