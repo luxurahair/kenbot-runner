@@ -713,7 +713,7 @@ def main() -> None:
                 try:
                     publish_photos_as_comment_batch(FB_PAGE_ID, FB_TOKEN, post_id, extra_photos)
                 except Exception as e:
-                    log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "event": event})
+                    log_event(sb, slug, "FB_EXTRA_PHOTOS_FAIL", {"post_id": post_id, "err": str(e)})
 
             # ✅ upsert + base_text doivent être DANS le NEW
             upsert_post(sb, {
