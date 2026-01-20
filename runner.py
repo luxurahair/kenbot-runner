@@ -360,6 +360,37 @@ def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict
 print("BOOT_OK", utc_now_iso(), "RAW_BUCKET=", RAW_BUCKET)
 log_event(sb, "BOOT", "BOOT_OK", {"ts": utc_now_iso(), "raw_bucket": RAW_BUCKET})
 
+import json
+
+def upload_raw_pages(sb, run_id: str, pages_html: List[Tuple[int, str]], meta: Dict[str, Any]) -> None:
+    """
+    Upload les pages HTML dans Supabase Storage (RAW_BUCKET) pour audit.
+    Emplacement:
+      kennebec-raw / raw_pages/<run_id>/
+        - meta.json
+        - kennebec_page_1.html
+        - kennebec_page_2.html
+        - kennebec_page_3.html
+    """
+    storage = sb.storage.from_(RAW_BUCKET)
+
+    # meta
+    meta_path = f"raw_pages/{run_id}/meta.json"
+    storage.upload(
+        meta_path,
+        json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"),
+        {"content-type": "application/json", "upsert": "true"},
+    )
+
+    # pages
+    for idx, html in pages_html:
+        p = f"raw_pages/{run_id}/kennebec_page_{idx}.html"
+        storage.upload(
+            p,
+            (html or "").encode("utf-8"),
+            {"content-type": "text/html; charset=utf-8", "upsert": "true"},
+        )
+
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
