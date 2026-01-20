@@ -522,15 +522,18 @@ def _process_price_changed_for_api() -> Dict[str, Any]:
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
-    print("BOOT_OK", utc_now_iso(), "RAW_BUCKET=", RAW_BUCKET)
-    log_event(sb, "BOOT", "BOOT_OK", {"ts": utc_now_iso(), "raw_bucket": RAW_BUCKET})
-  
+    # ---- BOOT LOG (ne doit jamais bloquer le run)
+    try:
+        log_event(sb, "BOOT", "BOOT_OK", {"ts": utc_now_iso(), "raw_bucket": RAW_BUCKET})
+    except Exception as e:
+        print("WARN: log_event BOOT_OK failed:", e)
+
     inv_db = get_inventory_map(sb)
     posts_db = get_posts_map(sb)
 
     log_event(sb, "ENV", "ENV_REBUILD", {"KENBOT_REBUILD_POSTS": os.getenv("KENBOT_REBUILD_POSTS")})
 
-    # --- REBUILD POSTS MAP (mémoire FB -> Supabase) ---
+    # ---- REBUILD POSTS MAP (mémoire FB -> Supabase)
     REBUILD = os.getenv("KENBOT_REBUILD_POSTS", "0").strip() == "1"
     if REBUILD:
         try:
@@ -541,12 +544,14 @@ def main() -> None:
                 stock = (inv.get("stock") or "").strip().upper()
                 if not stock:
                     continue
+
                 info = fb_map.get(stock)
                 if not info:
                     continue
 
                 upsert_post(sb, {
                     "slug": slug,
+                    "stock": stock,                 # ✅ IMPORTANT
                     "post_id": info["post_id"],
                     "status": "ACTIVE",
                     "published_at": info.get("published_at"),
@@ -561,6 +566,7 @@ def main() -> None:
 
         except Exception as e:
             log_event(sb, "REBUILD_POSTS", "REBUILD_POSTS_FAIL", {"err": str(e)})
+            raise
 
     # 1) Fetch listing pages (3 pages)
     now = utc_now_iso()
