@@ -8,7 +8,7 @@ def generate_facebook_text(text_engine_url: str, slug: str, event: str, vehicle:
     url = f"{base}/generate"
 
     payload = {"slug": slug, "event": event, "vehicle": vehicle}
-    r = requests.post(url, json=payload, timeout=60)
+    r = requests.post(url, json=payload, timeout=180)
     try:
         data = r.json()
     except Exception:
