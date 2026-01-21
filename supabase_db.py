@@ -53,7 +53,15 @@ def get_latest_snapshot_run_id(sb: Client, bucket: str, runs_folder: str = "runs
 def get_client(url: str, key: str) -> Client:
     if not url or not key:
         raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY manquants.")
-    return create_client(url, key)
+
+    base = url.strip().rstrip("/")  # base sans slash
+
+    try:
+        from supabase.lib.client_options import ClientOptions
+        opts = ClientOptions(storage_url=f"{base}/storage/v1/")
+        return create_client(base, key, options=opts)
+    except Exception:
+        return create_client(base, key)
 
 def upsert_inventory(sb: Client, rows: List[Dict[str, Any]]) -> None:
     if not rows:
