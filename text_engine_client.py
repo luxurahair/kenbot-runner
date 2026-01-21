@@ -1,23 +1,29 @@
+import time
 import requests
-from typing import Any, Dict
 
-def generate_facebook_text(text_engine_url: str, slug: str, event: str, vehicle: Dict[str, Any]) -> str:
-    base = (text_engine_url or "").rstrip("/")
-    if not base:
-        raise RuntimeError("KENBOT_TEXT_ENGINE_URL manquant.")
-    url = f"{base}/generate"
-
+def generate_facebook_text(base_url: str, slug: str, event: str, vehicle: dict) -> str:
+    url = f"{base_url.rstrip('/')}/generate"
     payload = {"slug": slug, "event": event, "vehicle": vehicle}
-    r = requests.post(url, json=payload, timeout=180)
-    try:
-        data = r.json()
-    except Exception:
-        data = {"raw": r.text}
 
-    if not r.ok:
-        raise RuntimeError(f"Text engine error ({r.status_code}): {data}")
+    last_err = None
+    for attempt in range(1, 4):  # 3 essais
+        try:
+            r = requests.post(url, json=payload, timeout=90)
+            r.raise_for_status()
+            j = r.json()
+            return (j.get("text") or "").strip()
+        except Exception as e:
+            last_err = e
+            time.sleep(2 * attempt)
 
-    txt = (data.get("facebook_text") or "").strip()
-    if not txt:
-        raise RuntimeError("Text engine a retourné un facebook_text vide.")
-    return txt + "\n"
+    # fallback minimal: pas beau, mais ça publie
+    v = vehicle or {}
+    return (
+        f"🔥 {v.get('title','Véhicule')} 🔥\n\n"
+        f"💰 {v.get('price','')}\n"
+        f"📊 {v.get('mileage','')}\n"
+        f"🧾 Stock : {v.get('stock','')}\n"
+        f"🔢 VIN : {v.get('vin','')}\n\n"
+        f"{v.get('url','')}\n"
+        f"\n⚠️ (Texte généré en mode secours — service AI indisponible)"
+    )
