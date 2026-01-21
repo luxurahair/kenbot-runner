@@ -692,8 +692,9 @@ def main() -> None:
             return names[0] if names else None
         except Exception:
             return None
- 
-        for stock, old_price, new_price in price_drops:
+
+    # ---- appliquer les baisses de prix (en dehors de la fonction)
+    for stock, old_price, new_price in price_drops:
         info = index_by_stock.get(stock) or {}
         post_id = info.get("post_id")
         if not post_id:
