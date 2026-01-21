@@ -530,6 +530,14 @@ def main() -> None:
 
     inv_db = get_inventory_map(sb)
     posts_db = get_posts_map(sb)
+   
+    inv_db = get_inventory_map(sb)
+    posts_db = get_posts_map(sb)
+
+        # ---- Snapshot context (toujours disponible)
+    SNAP_BUCKET = "kennebec-facebook-snapshots"
+    fb_map: Dict[str, Dict[str, Any]] = {}
+    snap_run_id: str | None = None
 
     log_event(sb, "ENV", "ENV_REBUILD", {"KENBOT_REBUILD_POSTS": os.getenv("KENBOT_REBUILD_POSTS")})
 
@@ -564,7 +572,6 @@ def main() -> None:
 
                 upsert_post(sb, {
                     "slug": slug,
-                    "stock": stock,  # ✅ IMPORTANT
                     "post_id": info["post_id"],
                     "status": "ACTIVE",
                     "published_at": info.get("published_at"),
@@ -635,6 +642,108 @@ def main() -> None:
         slug = slugify(title, stock)
         d["slug"] = slug
         current[slug] = d
+
+    # ---- Build stock -> slug (inventaire Kennebec courant)
+    current_by_stock: Dict[str, str] = {}
+    for s_slug, v in current.items():
+        st = (v.get("stock") or "").strip().upper()
+        if st:
+            current_by_stock[st] = s_slug
+
+    # ---- Assure fb_map + snap_run_id même si REBUILD=0
+    if not snap_run_id:
+        snap_run_id = utc_now_iso().replace(":", "").replace("-", "").split(".")[0]
+
+    if not fb_map:
+        # on lit le dernier snapshot fb_map_by_stock.json déjà stocké
+        latest_run = get_latest_snapshot_run_id(sb, SNAP_BUCKET)
+        if latest_run:
+            fb_map = read_json_from_storage(sb, SNAP_BUCKET, f"runs/{latest_run}/fb_map_by_stock.json") or {}
+
+    # ---- Construire index_by_stock pour CE run (post_id + prix Kennebec)
+    index_by_stock: Dict[str, Any] = {}
+    for stock, info in (fb_map or {}).items():
+        s = (stock or "").strip().upper()
+        slug = current_by_stock.get(s)
+        v = current.get(slug) if slug else None
+
+        index_by_stock[s] = {
+            "post_id": (info or {}).get("post_id"),
+            "published_at": (info or {}).get("published_at"),
+            "price_int": (v.get("price_int") if v else None),
+            "title": (v.get("title") if v else None),
+            "url": (v.get("url") if v else None),
+        }
+
+    sb.storage.from_(SNAP_BUCKET).upload(
+        f"runs/{snap_run_id}/index_by_stock.json",
+        json.dumps(index_by_stock, ensure_ascii=False, indent=2).encode("utf-8"),
+        file_options={"content-type": "application/json", "upsert": "true"},
+    )
+    print(f"✅ SNAPSHOT index_by_stock OK → runs/{snap_run_id}/index_by_stock.json ({len(index_by_stock)} stocks)")
+
+    # ---- Trouver le run précédent (2e plus récent) pour comparer les prix
+    def _get_prev_run_id(cur_run: str) -> str | None:
+        try:
+            items = sb.storage.from_(SNAP_BUCKET).list("runs") or []
+            names = sorted([it.get("name") for it in items if it.get("name")], reverse=True)
+            # enlever le run courant si présent
+            names = [n for n in names if n != cur_run]
+            return names[0] if names else None
+        except Exception:
+            return None
+ 
+        for stock, old_price, new_price in price_drops:
+        info = index_by_stock.get(stock) or {}
+        post_id = info.get("post_id")
+        if not post_id:
+            continue
+
+        slug = current_by_stock.get(stock)
+        v = current.get(slug) if slug else {}
+
+        price_txt = f"{new_price:,}".replace(",", " ") + " $"
+        km_int = _clean_km(v.get("km_int"))
+        km_txt = (f"{km_int:,}".replace(",", " ") + " km") if km_int else ""
+
+        vehicle_payload = {
+            "title": _clean_title(v.get("title") or ""),
+            "price": price_txt,
+            "mileage": km_txt,
+            "stock": stock,
+            "vin": (v.get("vin") or "").strip().upper(),
+            "url": v.get("url") or "",
+        }
+
+        fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=(slug or stock), event="PRICE_CHANGED", vehicle=vehicle_payload) or ""
+        base = fb_text.rstrip()
+        markers = ["🔁 J’accepte les échanges", "📞 Daniel Giroux", "#DanielGiroux"]
+        if not any(m in base for m in markers):
+            fb_text = base + dealer_footer()
+        else:
+            fb_text = base
+
+        if DRY_RUN:
+            print(f"DRY_RUN PRICE_DROP {stock}: {old_price} -> {new_price}")
+        else:
+            try:
+                update_post_text(post_id, FB_TOKEN, fb_text)
+                log_event(sb, (slug or stock), "PRICE_DROP_UPDATED", {"stock": stock, "post_id": post_id, "old": old_price, "new": new_price})
+                print(f"✅ UPDATED FB PRICE_DROP {stock}: {old_price} -> {new_price}")
+            except Exception as e:
+                log_event(sb, (slug or stock), "PRICE_DROP_UPDATE_FAIL", {"stock": stock, "post_id": post_id, "err": str(e)})
+
+    prev_run = _get_prev_run_id(snap_run_id)
+    prev_index = read_json_from_storage(sb, SNAP_BUCKET, f"runs/{prev_run}/index_by_stock.json") if prev_run else {}
+
+    price_drops: List[Tuple[str, int, int]] = []
+    for stock, cur in index_by_stock.items():
+        cur_price = cur.get("price_int")
+        old_price = (prev_index.get(stock) or {}).get("price_int")
+        if isinstance(cur_price, int) and isinstance(old_price, int) and cur_price < old_price:
+            price_drops.append((stock, old_price, cur_price))
+
+    print(f"PRICE_DROPS detected: {len(price_drops)} (prev_run={prev_run})")
 
     current_slugs = set(current.keys())
     db_slugs = set(inv_db.keys())
