@@ -11,15 +11,15 @@ from dotenv import load_dotenv
 from kennebec_scrape import (
     parse_inventory_listing_urls,
     parse_vehicle_detail_simple,
-    slugify,
-)
+    slugify,)
+
 from text_engine_client import generate_facebook_text
 from fb_api import (
     publish_photos_unpublished,
     create_post_with_attached_media,
     update_post_text,
-    publish_photos_as_comment_batch,
-)
+    publish_photos_as_comment_batch,)
+
 from supabase_db import (
     get_client,
     get_inventory_map,
@@ -29,8 +29,8 @@ from supabase_db import (
     log_event,
     utc_now_iso,
     read_json_from_storage,
-    get_latest_snapshot_run_id,
-)
+    get_latest_snapshot_run_id,)
+
 # Load env (local dev only; on Render, env vars are injected)
 for name in (".env.local", ".kenbot_env", ".env"):
     p = Path(name)
@@ -693,7 +693,20 @@ def main() -> None:
         except Exception:
             return None
 
-    # ---- appliquer les baisses de prix (en dehors de la fonction)
+    # ---- PRICE DROPS (Kennebec baisse vs snapshot précédent)
+    prev_run = _get_prev_run_id(snap_run_id)
+    prev_index = read_json_from_storage(sb, SNAP_BUCKET, f"runs/{prev_run}/index_by_stock.json") if prev_run else {}
+
+    price_drops: List[Tuple[str, int, int]] = []
+    for stock, cur in index_by_stock.items():
+        cur_price = cur.get("price_int")
+        old_price = (prev_index.get(stock) or {}).get("price_int")
+        if isinstance(cur_price, int) and isinstance(old_price, int) and cur_price < old_price:
+            price_drops.append((stock, old_price, cur_price))
+
+    print(f"PRICE_DROPS detected: {len(price_drops)} (prev_run={prev_run})")
+
+    # ---- appliquer les baisses de prix (update FB)
     for stock, old_price, new_price in price_drops:
         info = index_by_stock.get(stock) or {}
         post_id = info.get("post_id")
@@ -716,7 +729,13 @@ def main() -> None:
             "url": v.get("url") or "",
         }
 
-        fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=(slug or stock), event="PRICE_CHANGED", vehicle=vehicle_payload) or ""
+        fb_text = generate_facebook_text(
+            TEXT_ENGINE_URL,
+            slug=(slug or stock),
+            event="PRICE_CHANGED",
+            vehicle=vehicle_payload
+        ) or ""
+
         base = fb_text.rstrip()
         markers = ["🔁 J’accepte les échanges", "📞 Daniel Giroux", "#DanielGiroux"]
         if not any(m in base for m in markers):
@@ -729,22 +748,12 @@ def main() -> None:
         else:
             try:
                 update_post_text(post_id, FB_TOKEN, fb_text)
-                log_event(sb, (slug or stock), "PRICE_DROP_UPDATED", {"stock": stock, "post_id": post_id, "old": old_price, "new": new_price})
+                log_event(sb, (slug or stock), "PRICE_DROP_UPDATED",
+                          {"stock": stock, "post_id": post_id, "old": old_price, "new": new_price})
                 print(f"✅ UPDATED FB PRICE_DROP {stock}: {old_price} -> {new_price}")
             except Exception as e:
-                log_event(sb, (slug or stock), "PRICE_DROP_UPDATE_FAIL", {"stock": stock, "post_id": post_id, "err": str(e)})
-
-    prev_run = _get_prev_run_id(snap_run_id)
-    prev_index = read_json_from_storage(sb, SNAP_BUCKET, f"runs/{prev_run}/index_by_stock.json") if prev_run else {}
-
-    price_drops: List[Tuple[str, int, int]] = []
-    for stock, cur in index_by_stock.items():
-        cur_price = cur.get("price_int")
-        old_price = (prev_index.get(stock) or {}).get("price_int")
-        if isinstance(cur_price, int) and isinstance(old_price, int) and cur_price < old_price:
-            price_drops.append((stock, old_price, cur_price))
-
-    print(f"PRICE_DROPS detected: {len(price_drops)} (prev_run={prev_run})")
+                log_event(sb, (slug or stock), "PRICE_DROP_UPDATE_FAIL",
+                          {"stock": stock, "post_id": post_id, "err": str(e)})
 
     current_slugs = set(current.keys())
     db_slugs = set(inv_db.keys())
