@@ -692,12 +692,18 @@ def main() -> None:
             return names[0] if names else None
         except Exception:
             return None
+    
 
     # ---- PRICE DROPS (Kennebec baisse vs snapshot précédent)
-    prev_run = _get_prev_run_id(snap_run_id)
-    prev_index = read_json_from_storage(sb, SNAP_BUCKET, f"runs/{prev_run}/index_by_stock.json") if prev_run else {}
-
+    # Toujours initialiser AVANT toute utilisation (anti UnboundLocalError)
     price_drops: List[Tuple[str, int, int]] = []
+
+    prev_run = _get_prev_run_id(snap_run_id)
+    rev_index = (
+        read_json_from_storage(sb, SNAP_BUCKET, f"runs/{prev_run}/index_by_stock.json")
+        if prev_run else {}
+    )
+
     for stock, cur in index_by_stock.items():
         cur_price = cur.get("price_int")
         old_price = (prev_index.get(stock) or {}).get("price_int")
@@ -706,8 +712,8 @@ def main() -> None:
 
     print(f"PRICE_DROPS detected: {len(price_drops)} (prev_run={prev_run})")
 
-    # ---- appliquer les baisses de prix (update FB)
-    for stock, old_price, new_price in price_drops:
+    # ---- appliquer les baisses de prix (update FB SANS text-engine)
+    or stock, old_price, new_price in price_drops:
         info = index_by_stock.get(stock) or {}
         post_id = info.get("post_id")
         if not post_id:
@@ -716,44 +722,34 @@ def main() -> None:
         slug = current_by_stock.get(stock)
         v = current.get(slug) if slug else {}
 
-        price_txt = f"{new_price:,}".replace(",", " ") + " $"
-        km_int = _clean_km(v.get("km_int"))
-        km_txt = (f"{km_int:,}".replace(",", " ") + " km") if km_int else ""
-
-        vehicle_payload = {
-            "title": _clean_title(v.get("title") or ""),
-            "price": price_txt,
-            "mileage": km_txt,
-            "stock": stock,
-            "vin": (v.get("vin") or "").strip().upper(),
-            "url": v.get("url") or "",
-        }
-
-        fb_text = generate_facebook_text(
-            TEXT_ENGINE_URL,
-            slug=(slug or stock),
-            event="PRICE_CHANGED",
-            vehicle=vehicle_payload
-        ) or ""
-
-        base = fb_text.rstrip()
-        markers = ["🔁 J’accepte les échanges", "📞 Daniel Giroux", "#DanielGiroux"]
-        if not any(m in base for m in markers):
-            fb_text = base + dealer_footer()
-        else:
-            fb_text = base
+        # Message simple, rapide, fiable (pas d'AI ici)
+        msg = (
+            "💥 NOUVEAU PRIX 💥\n\n"
+            f"Ancien prix : {old_price:,} $\n"
+            f"Nouveau prix : {new_price:,} $\n\n"
+            f"{v.get('url','')}"
+        )
 
         if DRY_RUN:
             print(f"DRY_RUN PRICE_DROP {stock}: {old_price} -> {new_price}")
         else:
             try:
-                update_post_text(post_id, FB_TOKEN, fb_text)
-                log_event(sb, (slug or stock), "PRICE_DROP_UPDATED",
-                          {"stock": stock, "post_id": post_id, "old": old_price, "new": new_price})
+                update_post_text(post_id, FB_TOKEN, msg)
+                log_event(
+                    sb,
+                    slug or stock,
+                    "PRICE_DROP_UPDATED",
+                    {"stock": stock, "post_id": post_id, "old": old_price, "new": new_price},
+                )
                 print(f"✅ UPDATED FB PRICE_DROP {stock}: {old_price} -> {new_price}")
             except Exception as e:
-                log_event(sb, (slug or stock), "PRICE_DROP_UPDATE_FAIL",
-                          {"stock": stock, "post_id": post_id, "err": str(e)})
+                log_event(
+                    sb,
+                    slug or stock,
+                    "PRICE_DROP_UPDATE_FAIL",
+                    {"stock": stock, "post_id": post_id, "err": str(e)},
+                )
+
 
     current_slugs = set(current.keys())
     db_slugs = set(inv_db.keys())
