@@ -1,9 +1,10 @@
 import os
 import re
-import hashlib
+import json
 import time
+import hashlib
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -11,16 +12,20 @@ from dotenv import load_dotenv
 from kennebec_scrape import (
     parse_inventory_listing_urls,
     parse_vehicle_detail_simple,
-    slugify,)
+    slugify,
+)
 
 from text_engine_client import generate_facebook_text
+
 from fb_api import (
     publish_photos_unpublished,
     create_post_with_attached_media,
     update_post_text,
-    publish_photos_as_comment_batch,)
+    publish_photos_as_comment_batch,
+)
 
 from supabase_db import (
+    # client + core maps
     get_client,
     get_inventory_map,
     get_posts_map,
@@ -28,39 +33,74 @@ from supabase_db import (
     upsert_post,
     log_event,
     utc_now_iso,
-    read_json_from_storage,
-    get_latest_snapshot_run_id,)
 
-# Load env (local dev only; on Render, env vars are injected)
+    # storage + snapshots
+    read_json_from_storage,
+    get_latest_snapshot_run_id,
+    upload_json_to_storage,
+    upload_bytes_to_storage,
+    cleanup_storage_runs,
+
+    # mémoire tables
+    upsert_scrape_run,
+    upsert_raw_page,
+    upsert_sticker_pdf,
+    upsert_output,
+)
+
+# -------------------------
+# Env load (local dev only)
+# -------------------------
 for name in (".env.local", ".kenbot_env", ".env"):
     p = Path(name)
     if p.exists():
         load_dotenv(p, override=False)
         break
 
+# -------------------------
+# Config
+# -------------------------
 BASE_URL = os.getenv("KENBOT_BASE_URL", "https://www.kennebecdodge.ca").rstrip("/")
 INVENTORY_PATH = os.getenv("KENBOT_INVENTORY_PATH", "/fr/inventaire-occasion/")
-TEXT_ENGINE_URL = os.getenv("KENBOT_TEXT_ENGINE_URL", "").strip()
+
+TEXT_ENGINE_URL = (os.getenv("KENBOT_TEXT_ENGINE_URL") or "").strip()
 
 FB_PAGE_ID = (os.getenv("KENBOT_FB_PAGE_ID") or os.getenv("FB_PAGE_ID") or "").strip()
-FB_TOKEN   = (os.getenv("KENBOT_FB_ACCESS_TOKEN") or os.getenv("FB_PAGE_ACCESS_TOKEN") or "").strip()
+FB_TOKEN = (os.getenv("KENBOT_FB_ACCESS_TOKEN") or os.getenv("FB_PAGE_ACCESS_TOKEN") or "").strip()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
+SUPABASE_KEY = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
 
-STICKERS_BUCKET = os.getenv("SB_BUCKET_STICKERS", "kennebec-stickers").strip()
+# Storage buckets
 RAW_BUCKET = os.getenv("SB_BUCKET_RAW", "kennebec-raw").strip()
+STICKERS_BUCKET = os.getenv("SB_BUCKET_STICKERS", "kennebec-stickers").strip()
+SNAP_BUCKET = os.getenv("SB_BUCKET_SNAPSHOTS", "kennebec-facebook-snapshots").strip()
 OUTPUTS_BUCKET = os.getenv("SB_BUCKET_OUTPUTS", "kennebec-outputs").strip()
 
+# Behaviour flags
 DRY_RUN = os.getenv("KENBOT_DRY_RUN", "0").strip() == "1"
+REBUILD_POSTS = os.getenv("KENBOT_REBUILD_POSTS", "0").strip() == "1"
 FORCE_STOCK = (os.getenv("KENBOT_FORCE_STOCK") or "").strip().upper()
-MAX_TARGETS = int(os.getenv("KENBOT_MAX_TARGETS", "4").strip() or "4")
-SLEEP_BETWEEN = int(os.getenv("KENBOT_SLEEP_BETWEEN_POSTS", "60").strip() or "60")
 
-if not FB_PAGE_ID or not FB_TOKEN:
-    raise SystemExit("🛑 FB creds manquants: KENBOT_FB_PAGE_ID + KENBOT_FB_ACCESS_TOKEN")
+MAX_TARGETS = int(os.getenv("KENBOT_MAX_TARGETS", "4").strip() or "4")
+SLEEP_BETWEEN = int(os.getenv("KENBOT_SLEEP_BETWEEN_POSTS", "30").strip() or "30")
+
+CACHE_STICKERS = os.getenv("KENBOT_CACHE_STICKERS", "1").strip() == "1"
+STICKER_MAX = int(os.getenv("KENBOT_STICKER_MAX", "999").strip() or "999")
+
+RAW_KEEP = int(os.getenv("KENBOT_RAW_KEEP", "2").strip() or "2")
+SNAP_KEEP = int(os.getenv("KENBOT_SNAP_KEEP", "10").strip() or "10")
+
+MAX_PHOTOS = int(os.getenv("KENBOT_MAX_PHOTOS", "15").strip() or "15")
+POST_PHOTOS = int(os.getenv("KENBOT_POST_PHOTOS", "10").strip() or "10")
+
+TMP_PHOTOS = Path(os.getenv("KENBOT_TMP_PHOTOS_DIR", "/tmp/kenbot_photos"))
+TMP_PHOTOS.mkdir(parents=True, exist_ok=True)
+
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise SystemExit("🛑 Supabase creds manquants: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY")
+if not FB_PAGE_ID or not FB_TOKEN:
+    raise SystemExit("🛑 FB creds manquants: KENBOT_FB_PAGE_ID + KENBOT_FB_ACCESS_TOKEN")
 if not TEXT_ENGINE_URL:
     raise SystemExit("🛑 KENBOT_TEXT_ENGINE_URL manquant (kenbot-text-engine)")
 
@@ -70,8 +110,17 @@ SESSION.headers.update({
     "Accept-Language": "fr-CA,fr;q=0.9,en;q=0.8",
 })
 
-def _sha256(b: bytes) -> str:
+# -------------------------
+# Helpers
+# -------------------------
+def _sha256_hex(b: bytes) -> str:
     return hashlib.sha256(b or b"").hexdigest()
+
+def _run_id_from_now(now_iso: str) -> str:
+    digits = "".join(ch for ch in (now_iso or "") if ch.isdigit())
+    if len(digits) >= 14:
+        return f"{digits[0:8]}_{digits[8:14]}"
+    return f"run_{int(time.time())}"
 
 def _is_pdf_ok(b: bytes) -> bool:
     return bool(b) and len(b) >= 10_240 and b[:4] == b"%PDF"
@@ -80,81 +129,85 @@ def _is_stellantis_vin(vin: str) -> bool:
     vin = (vin or "").strip().upper()
     if len(vin) != 17:
         return False
-    # Stellantis fréquents chez toi: 1C/2C/3C + Jeep Italy ZAC + Fiat ZFA
-    return (
-        vin.startswith(("1C", "2C", "3C")) or
-        vin.startswith(("ZAC", "ZFA"))
-    )
+    return vin.startswith(("1C", "2C", "3C", "ZAC", "ZFA"))
 
-def _storage_download_or_none(sb, bucket: str, path: str) -> bytes | None:
+def _clean_title(t: str) -> str:
+    t = (t or "").strip()
+    low = t.lower()
+    if low in {"jeep", "dodge", "ram", "chrysler", "fiat"}:
+        return ""
+    if len(t) < 6:
+        return ""
+    return t
+
+def _clean_int(x) -> Optional[int]:
+    if x is None:
+        return None
     try:
-        return sb.storage.from_(bucket).download(path)
+        s = str(x).replace(" ", "").replace("\u00a0", "").replace(",", "").replace("$", "")
+        return int(s)
     except Exception:
         return None
 
-def ensure_sticker_cached(sb, vin: str, run_id: str = "") -> dict:
-    """
-    Assure qu'on a un sticker en cache Storage:
-    - pdf_ok/<VIN>.pdf si valide
-    - pdf_bad/<VIN>.pdf si invalide (<10KB ou pas %PDF)
-    Upsert sticker_pdfs (DB).
-    """
-    vin = (vin or "").strip().upper()
-    if len(vin) != 17:
-        return {"vin": vin, "status": "skip", "reason": "vin_invalid"}
-
-    ok_path = f"pdf_ok/{vin}.pdf"
-    bad_path = f"pdf_bad/{vin}.pdf"
-
-    # 1) Déjà en cache OK ?
-    data = _storage_download_or_none(sb, STICKERS_BUCKET, ok_path)
-    if _is_pdf_ok(data or b""):
-        meta = {"vin": vin, "status": "ok", "storage_path": ok_path, "bytes": len(data), "sha256": _sha256(data), "reason": None, "run_id": run_id}
-        sb.table("sticker_pdfs").upsert(meta).execute()
-        return meta
-
-    # 2) Déjà en cache BAD ?
-    data_bad = _storage_download_or_none(sb, STICKERS_BUCKET, bad_path)
-    if data_bad is not None and (len(data_bad) > 0):
-        meta = {"vin": vin, "status": "bad", "storage_path": bad_path, "bytes": len(data_bad), "sha256": _sha256(data_bad), "reason": "cached_bad", "run_id": run_id}
-        sb.table("sticker_pdfs").upsert(meta).execute()
-        return meta
-
-    # 3) Télécharger Chrysler (runner = seul fetcher)
-    pdf_url = f"https://www.chrysler.com/hostd/windowsticker/getWindowStickerPdf.do?vin={vin}"
-    try:
-        r = SESSION.get(pdf_url, timeout=25)
-        blob = r.content or b""
-    except Exception:
-        blob = b""
-
-    if _is_pdf_ok(blob):
-        sb.storage.from_(STICKERS_BUCKET).upload(
-            ok_path,
-            blob,
-            {"content-type": "application/pdf", "upsert": "true"},
-        )
-        meta = {"vin": vin, "status": "ok", "storage_path": ok_path, "bytes": len(blob), "sha256": _sha256(blob), "reason": None, "run_id": run_id}
-        sb.table("sticker_pdfs").upsert(meta).execute()
-        return meta
-
-    # BAD -> upload pour audit (optionnel, mais utile)
-    sb.storage.from_(STICKERS_BUCKET).upload(
-        bad_path,
-        blob or b"x",
-        {"content-type": "application/pdf", "upsert": "true"},
+def _dealer_footer() -> str:
+    return (
+        "\n\n🔁 J’accepte les échanges : 🚗 auto • 🏍️ moto • 🛥️ bateau • 🛻 VTT • 🏁 côte-à-côte\n"
+        "📸 Envoie-moi les photos + infos de ton échange (année / km / paiement restant) → je te reviens vite.\n\n"
+        "👋 Publiée par Daniel Giroux — je réponds vite (pas un robot, promis 😄)\n"
+        "📍 Saint-Georges (Beauce) | Prise de possession rapide possible\n"
+        "📄 Vente commerciale — 2 taxes applicables\n\n"
+        "📩 Écris-moi en privé\n"
+        "📞 Daniel Giroux — 418-222-3939\n\n"
+        "#RAM #Truck #Pickup #ProMaster #Cargo #Van #RAM1500 #Beauce #SaintGeorges #Quebec "
+        "#AutoUsagée #VehiculeOccasion #DanielGiroux"
     )
-    meta = {"vin": vin, "status": "bad", "storage_path": bad_path, "bytes": len(blob or b""), "sha256": _sha256(blob or b""), "reason": "invalid_pdf", "run_id": run_id}
-    sb.table("sticker_pdfs").upsert(meta).execute()
-    return meta
 
-TMP_PHOTOS = Path(os.getenv("KENBOT_TMP_PHOTOS_DIR", "/tmp/kenbot_photos"))
-TMP_PHOTOS.mkdir(parents=True, exist_ok=True)
+def _strip_sold_banner(txt: str) -> str:
+    t = (txt or "").lstrip()
+    if not t.startswith("🚨 VENDU 🚨"):
+        return t
+    lines = t.splitlines()
+    out = []
+    cutting = True
+    for line in lines:
+        if cutting:
+            if "────────────────────" in line:
+                cutting = False
+            continue
+        out.append(line)
+    return ("\n".join(out)).lstrip()
 
-MAX_PHOTOS = 15
-POST_PHOTOS = 10  # 10 dans le post, 5 extra best-effort
+def _sold_prefix() -> str:
+    return (
+        "🚨 VENDU 🚨\n\n"
+        "Ce véhicule n’est plus disponible.\n\n"
+        "👉 Vous recherchez un véhicule semblable ?\n"
+        "Contactez-moi directement, je peux vous aider.\n\n"
+        "Daniel Giroux\n"
+        "📞 418-222-3939\n"
+        "────────────────────\n\n"
+    )
 
-def download_photos(stock: str, urls: List[str], limit: int) -> List[Path]:
+def _make_sold_message(base_text: str) -> str:
+    base = _strip_sold_banner(base_text).strip()
+    if not base:
+        base = "(Détails indisponibles — contactez-moi.)"
+    return _sold_prefix() + base
+
+def _fetch_fb_post_message(post_id: str) -> str:
+    url = f"https://graph.facebook.com/v24.0/{post_id}"
+    r = SESSION.get(url, params={"fields": "message", "access_token": FB_TOKEN}, timeout=30)
+    j = r.json()
+    if not r.ok:
+        raise RuntimeError(f"FB get post message error: {j}")
+    return (j.get("message") or "").strip()
+
+def _download_photo(url: str, out_path: Path) -> None:
+    r = SESSION.get(url, timeout=60)
+    r.raise_for_status()
+    out_path.write_bytes(r.content)
+
+def _download_photos(stock: str, urls: List[str], limit: int) -> List[Path]:
     out: List[Path] = []
     stock = (stock or "UNKNOWN").strip().upper()
     folder = TMP_PHOTOS / stock
@@ -170,160 +223,25 @@ def download_photos(stock: str, urls: List[str], limit: int) -> List[Path]:
         p = folder / f"{stock}_{i:02d}{ext}"
         if not p.exists():
             try:
-                download_photo(u, p)
+                _download_photo(u, p)
             except Exception:
                 continue
         out.append(p)
     return out
 
-def sold_prefix() -> str:
-    return (
-        "🚨 VENDU 🚨\n\n"
-        "Ce véhicule n’est plus disponible.\n\n"
-        "👉 Vous recherchez un véhicule semblable ?\n"
-        "Contactez-moi directement, je peux vous aider à en trouver un rapidement.\n\n"
-        "Daniel Giroux\n"
-        "📞 418-222-3939\n"
-        "────────────────────\n\n"
-    )
-
-def _preview_text(slug: str, event: str, fb_text: str) -> None:
-    preview = (fb_text or "").strip()
-    if len(preview) > 900:
-        preview = preview[:900] + "\n... [TRUNCATED]"
-    print(f"\n========== DRY_RUN {event}: {slug} ==========\n{preview}\n==============================================\n")
-
-def _clean_km(x):
-    if x is None:
-        return None
-    try:
-        s = str(x).replace(" ", "").replace("\u00a0", "").replace(",", "")
-        km = int(s)
-    except Exception:
-        return None
-    if km <= 0 or km > 500_000:
-        return None
-    return km
-
-def _clean_price_int(x):
-    if x is None:
-        return None
-    try:
-        s = str(x).replace(" ", "").replace("\u00a0", "").replace(",", "").replace("$", "")
-        p = int(s)
-    except Exception:
-        return None
-    if p <= 0 or p > 500_000:
-        return None
-    return p
-
-
-def _clean_title(t: str) -> str:
-    t = (t or "").strip()
-    low = t.lower()
-    # titres trop génériques = scrap incomplet
-    if low in {"jeep", "dodge", "ram", "chrysler", "fiat", "hyundai", "mazda", "mercedes", "polaris"}:
-        return ""
-    if len(t) < 6:
-        return ""
-    return t
-
-
-def _run_id_from_now(now_iso: str) -> str:
-    """
-    Génère un run_id stable et lisible à partir d'un timestamp ISO (utc_now_iso()).
-    Exemple: 20260118_212530
-    """
-    s = (now_iso or "").strip()
-    digits = "".join(ch for ch in s if ch.isdigit())
-    if len(digits) >= 14:
-        return f"{digits[0:8]}_{digits[8:14]}"
-    return f"run_{int(time.time())}"
-
-
-def dealer_footer() -> str:
-    return (
-        "\n\n🔁 J’accepte les échanges : 🚗 auto • 🏍️ moto • 🛥️ bateau • 🛻 VTT • 🏁 côte-à-côte\n"
-        "📸 Envoie-moi les photos + infos de ton échange (année / km / paiement restant) → je te reviens vite.\n\n"
-        "👋 Publiée par Daniel Giroux — je réponds vite (pas un robot, promis 😄)\n"
-        "📍 Saint-Georges (Beauce) | Prise de possession rapide possible\n"
-        "📄 Vente commerciale — 2 taxes applicables\n"
-        "✅ Inspection complète — véhicule propre & prêt à partir.\n\n"
-        "📩 Écris-moi en privé — ou texte direct\n"
-        "📞 Daniel Giroux — 418-222-3939\n\n"
-        "#RAM #Truck #Pickup #ProMaster #Cargo #Van #RAM1500 #Beauce #SaintGeorges #Quebec "
-        "#AutoUsagée #VehiculeOccasion #DanielGiroux"
-    )
-
-
-SOLD_BANNER_TITLE = "🚨 VENDU 🚨"
-SOLD_BANNER_BAR = "────────────────────"
-
-def strip_sold_banner(txt: str) -> str:
-    """
-    Retire NOTRE bandeau VENDU si le texte commence par lui.
-    On conserve 100% du contenu original.
-    """
-    t = (txt or "").lstrip()
-    if not t:
-        return ""
-
-    if not t.startswith(SOLD_BANNER_TITLE):
-        return t
-
-    lines = t.splitlines()
-    out: List[str] = []
-    cutting = True
-    # On coupe tout jusqu'à la ligne de séparation (incluse)
-    for line in lines:
-        if cutting:
-            if SOLD_BANNER_BAR in line:
-                cutting = False
-            continue
-        out.append(line)
-
-    return ("\n".join(out)).lstrip()
-
-
-def fetch_fb_post_message(post_id: str, token: str) -> str:
-    """
-    Lit le message actuel sur Facebook (pour capturer le texte original si base_text vide).
-    """
-    url = f"https://graph.facebook.com/v24.0/{post_id}"
-    r = SESSION.get(url, params={"fields": "message", "access_token": token}, timeout=30)
-    j = r.json()
-    if not r.ok:
-        raise RuntimeError(f"FB get post message error: {j}")
-    return (j.get("message") or "").strip()
-
-def make_sold_message(base_text: str) -> str:
-    base = strip_sold_banner(base_text).strip()
-    if not base:
-        base = "(Détails du véhicule indisponibles — contactez-moi et je vous aide à trouver l’équivalent.)"
-    return sold_prefix() + base
-
-def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict[str, Dict[str, Any]]:
-    """
-    Scanne les posts Facebook récents et retourne un mapping {STOCK -> {post_id, published_at}}
-    Stock supporté: 06193, 45211A, etc.
-    """
+def rebuild_posts_map(limit: int = 300) -> Dict[str, Dict[str, Any]]:
     posts_map: Dict[str, Dict[str, Any]] = {}
     fetched = 0
     after = None
 
     while fetched < limit:
-        params = {
-            "fields": "id,message,created_time,permalink_url",
-            "limit": 25,
-            "access_token": access_token,
-        }
+        params = {"fields": "id,message,created_time,permalink_url", "limit": 25, "access_token": FB_TOKEN}
         if after:
             params["after"] = after
 
-        url = f"https://graph.facebook.com/v24.0/{page_id}/posts"
+        url = f"https://graph.facebook.com/v24.0/{FB_PAGE_ID}/posts"
         r = SESSION.get(url, params=params, timeout=60)
         j = r.json()
-
         if not r.ok:
             raise RuntimeError(f"FB posts fetch failed: {j}")
 
@@ -333,11 +251,9 @@ def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict
 
         for item in data:
             fetched += 1
-
             msg = (item.get("message") or "").strip()
             post_id = item.get("id")
             created = item.get("created_time") or ""
-
             if not post_id or not msg:
                 continue
 
@@ -347,7 +263,6 @@ def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict
                 continue
 
             posts_map[stock] = {"post_id": post_id, "published_at": created}
-
             if fetched >= limit:
                 break
 
@@ -358,467 +273,208 @@ def rebuild_posts_map(page_id: str, access_token: str, limit: int = 300) -> Dict
 
     return posts_map
 
-import json
+def ensure_sticker_cached(sb, vin: str, run_id: str) -> Dict[str, Any]:
+    vin = (vin or "").strip().upper()
+    if len(vin) != 17:
+        return {"vin": vin, "status": "skip", "reason": "vin_invalid"}
 
-def upload_raw_pages(sb, run_id: str, pages_html: List[Tuple[int, str]], meta: Dict[str, Any]) -> None:
-    """
-    Upload les pages HTML dans Supabase Storage (RAW_BUCKET) pour audit.
-    Emplacement:
-      kennebec-raw / raw_pages/<run_id>/
-        - meta.json
-        - kennebec_page_1.html
-        - kennebec_page_2.html
-        - kennebec_page_3.html
-    """
-    storage = sb.storage.from_(RAW_BUCKET)
+    ok_path = f"pdf_ok/{vin}.pdf"
+    bad_path = f"pdf_bad/{vin}.pdf"
 
-    # meta
-    meta_path = f"raw_pages/{run_id}/meta.json"
-    storage.upload(
-        meta_path,
-        json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"),
-        {"content-type": "application/json", "upsert": "true"},
-    )
+    # Try existing OK
+    try:
+        blob = sb.storage.from_(STICKERS_BUCKET).download(ok_path)
+    except Exception:
+        blob = None
 
-    # pages
-    for idx, html in pages_html:
-        p = f"raw_pages/{run_id}/kennebec_page_{idx}.html"
-        storage.upload(
-            p,
-            (html or "").encode("utf-8"),
-            {"content-type": "text/html; charset=utf-8", "upsert": "true"},
-        )
+    if _is_pdf_ok(blob or b""):
+        upsert_sticker_pdf(sb, vin=vin, status="ok", storage_path=ok_path, data=blob, reason="", run_id=run_id)
+        return {"vin": vin, "status": "ok"}
 
-def _process_price_changed_for_api() -> Dict[str, Any]:
-    """
-    API helper: applique PRICE_CHANGED sur les posts existants.
-    PRICE_CHANGED est déterminé par comparaison:
-      Kennebec (scrape courant) vs Facebook snapshot (index_by_stock.json)
-    Retourne un résumé.
-    """
+    # Try existing BAD
+    try:
+        blob_bad = sb.storage.from_(STICKERS_BUCKET).download(bad_path)
+    except Exception:
+        blob_bad = None
+
+    if blob_bad is not None and len(blob_bad) > 0:
+        upsert_sticker_pdf(sb, vin=vin, status="bad", storage_path=bad_path, data=blob_bad, reason="cached_bad", run_id=run_id)
+        return {"vin": vin, "status": "bad"}
+
+    # Fetch from Stellantis
+    pdf_url = f"https://www.chrysler.com/hostd/windowsticker/getWindowStickerPdf.do?vin={vin}"
+    try:
+        r = SESSION.get(pdf_url, timeout=25)
+        fetched = r.content or b""
+    except Exception:
+        fetched = b""
+
+    if _is_pdf_ok(fetched):
+        upload_bytes_to_storage(sb, STICKERS_BUCKET, ok_path, fetched, content_type="application/pdf", upsert=True)
+        upsert_sticker_pdf(sb, vin=vin, status="ok", storage_path=ok_path, data=fetched, reason="", run_id=run_id)
+        return {"vin": vin, "status": "ok"}
+
+    blob_store = fetched if fetched else b"x"
+    upload_bytes_to_storage(sb, STICKERS_BUCKET, bad_path, blob_store, content_type="application/pdf", upsert=True)
+    upsert_sticker_pdf(sb, vin=vin, status="bad", storage_path=bad_path, data=blob_store, reason="invalid_pdf", run_id=run_id)
+    return {"vin": vin, "status": "bad"}
+
+# -------------------------
+# Main
+# -------------------------
+def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
+    now = utc_now_iso()
+    run_id = _run_id_from_now(now)
 
+    inv_db = get_inventory_map(sb)
     posts_db = get_posts_map(sb)
 
-    # ---- 1) Scrape Kennebec (même logique que main)
-    pages = [
-        f"{BASE_URL}{INVENTORY_PATH}",
-        f"{BASE_URL}{INVENTORY_PATH}?page=2",
-        f"{BASE_URL}{INVENTORY_PATH}?page=3",
-    ]
+    # Optional rebuild FB posts
+    fb_map: Dict[str, Dict[str, Any]] = {}
+    if REBUILD_POSTS:
+        fb_map = rebuild_posts_map(limit=300)
+        upload_json_to_storage(sb, SNAP_BUCKET, f"runs/{run_id}/fb_map_by_stock.json", fb_map, upsert=True)
 
-    urls: List[str] = []
-    for page in pages:
-        html = SESSION.get(page, timeout=30).text
-        urls += parse_inventory_listing_urls(BASE_URL, INVENTORY_PATH, html)
-
-    urls = sorted(list(dict.fromkeys(urls)))
-
-    current: Dict[str, Dict[str, Any]] = {}
-    current_by_stock: Dict[str, str] = {}
-
-    for url in urls:
-        d = parse_vehicle_detail_simple(SESSION, url)
-        stock = (d.get("stock") or "").strip().upper()
-        title = _clean_title((d.get("title") or "").strip())
-        if not stock or not title:
-            continue
-        d["title"] = title
-        slug = slugify(title, stock)
-        d["slug"] = slug
-        current[slug] = d
-        current_by_stock[stock] = slug
-
-    kb_stocks = set(current_by_stock.keys())
-
-    # ---- 2) Lire le dernier snapshot Facebook (facture)
-    SNAP_BUCKET = "kennebec-facebook-snapshots"
-    snap_run = get_latest_snapshot_run_id(sb, SNAP_BUCKET)
-
-    fb_index = (
-        read_json_from_storage(sb, SNAP_BUCKET, f"runs/{snap_run}/index_by_stock.json")
-        if snap_run else {}
-    )
-
-    fb_stocks = set((fb_index or {}).keys())
-
-    # ---- 3) Calcul PRICE_CHANGED (stock commun + prix différent)
-    # NOTE: fb_index[stock]["price_int"] est best-effort, donc on protège.
-    price_changed: List[str] = []
-    for stock in (kb_stocks & fb_stocks):
-        kb_slug = current_by_stock[stock]
-        kb_price = (current.get(kb_slug) or {}).get("price_int")
-        fb_price = (fb_index.get(stock) or {}).get("price_int")
-        if (kb_price is not None) and (fb_price is not None) and (kb_price != fb_price):
-            price_changed.append(kb_slug)
-
-    # dédup / stable
-    price_changed = sorted(list(dict.fromkeys(price_changed)))
-
-    updated = 0
-    skipped_no_post_id = 0
-    failed = 0
-
-    now = utc_now_iso()
-
-    for slug in price_changed:
-        post = posts_db.get(slug) or {}
-        post_id = post.get("post_id")
-        if not post_id:
-            skipped_no_post_id += 1
-            continue
-
-        v = current.get(slug) or {}
-        title_clean = _clean_title(v.get("title") or "")
-        vehicle_payload = {
-            "title": title_clean,
-            "price": "",
-            "mileage": "",
-            "stock": (v.get("stock") or "").strip().upper(),
-            "vin": (v.get("vin") or "").strip().upper(),
-            "url": v.get("url") or "",
-        }
-
-        fb_text = generate_facebook_text(
-            TEXT_ENGINE_URL,
-            slug=slug,
-            event="PRICE_CHANGED",
-            vehicle=vehicle_payload
-        ) or ""
-
-        base = fb_text.rstrip()
-        markers = ["🔁 J’accepte les échanges", "📞 Daniel Giroux", "#DanielGiroux"]
-        if not any(m in base for m in markers):
-            fb_text = base + dealer_footer()
-        else:
-            fb_text = base
-
-        try:
-            if not DRY_RUN:
-                update_post_text(post_id, FB_TOKEN, fb_text)
-
+        updated = 0
+        for slug, inv in inv_db.items():
+            stock = (inv.get("stock") or "").strip().upper()
+            info = fb_map.get(stock) if stock else None
+            if not info:
+                continue
             upsert_post(sb, {
                 "slug": slug,
-                "stock": (v.get("stock") or "").strip().upper(),  # IMPORTANT
-                "post_id": post_id,
+                "post_id": info.get("post_id"),
                 "status": "ACTIVE",
+                "published_at": info.get("published_at"),
                 "last_updated_at": now,
-                "base_text": fb_text,
+                "stock": stock,
             })
             updated += 1
 
-        except Exception as e:
-            failed += 1
-            log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "event": "PRICE_CHANGED"})
+        log_event(sb, "REBUILD", "REBUILD_POSTS_OK", {"fb_found": len(fb_map), "updated": updated, "run_id": run_id})
+        posts_db = get_posts_map(sb)
 
-    return {
-        "snapshot_run": snap_run,
-        "price_changed": len(price_changed),
-        "updated": updated,
-        "skipped_no_post_id": skipped_no_post_id,
-        "failed": failed,
-    }
-
-def main() -> None:
-    sb = get_client(SUPABASE_URL, SUPABASE_KEY)
-
-    # ---- BOOT LOG (ne doit jamais bloquer le run)
-    try:
-        log_event(sb, "BOOT", "BOOT_OK", {"ts": utc_now_iso(), "raw_bucket": RAW_BUCKET})
-    except Exception as e:
-        print("WARN: log_event BOOT_OK failed:", e)
-
-    inv_db = get_inventory_map(sb)
-    posts_db = get_posts_map(sb)
-   
-    inv_db = get_inventory_map(sb)
-    posts_db = get_posts_map(sb)
-
-        # ---- Snapshot context (toujours disponible)
-    SNAP_BUCKET = "kennebec-facebook-snapshots"
-    fb_map: Dict[str, Dict[str, Any]] = {}
-    snap_run_id: str | None = None
-
-    log_event(sb, "ENV", "ENV_REBUILD", {"KENBOT_REBUILD_POSTS": os.getenv("KENBOT_REBUILD_POSTS")})
-
-    # ---- REBUILD POSTS MAP (mémoire FB -> Supabase) + SNAPSHOT STORAGE
-    REBUILD = os.getenv("KENBOT_REBUILD_POSTS", "0").strip() == "1"
-    if REBUILD:
-        try:
-            fb_map = rebuild_posts_map(FB_PAGE_ID, FB_TOKEN, limit=300)
-
-            # ---- SNAPSHOT FACEBOOK -> STORAGE (FACTURE)
-            SNAP_BUCKET = "kennebec-facebook-snapshots"
-            snap_run_id = utc_now_iso().replace(":", "").replace("-", "").split(".")[0]
-
-            sb.storage.from_(SNAP_BUCKET).upload(
-                f"runs/{snap_run_id}/fb_map_by_stock.json",
-                json.dumps(fb_map, ensure_ascii=False, indent=2).encode("utf-8"),
-                file_options={"content-type": "application/json", "upsert": "true"},
-            )
-
-            print(f"✅ FB SNAPSHOT OK → runs/{snap_run_id}/fb_map_by_stock.json ({len(fb_map)} stocks)")
-
-            # ---- upsert posts (mémoire) en DB
-            updated = 0
-            for slug, inv in inv_db.items():
-                stock = (inv.get("stock") or "").strip().upper()
-                if not stock:
-                    continue
-
-                info = fb_map.get(stock)
-                if not info:
-                    continue
-
-                upsert_post(sb, {
-                    "slug": slug,
-                    "post_id": info["post_id"],
-                    "status": "ACTIVE",
-                    "published_at": info.get("published_at"),
-                    "last_updated_at": utc_now_iso(),
-                })
-                updated += 1
-
-            log_event(sb, "REBUILD_POSTS", "REBUILD_POSTS_OK", {
-                "fb_found": len(fb_map),
-                "updated": updated,
-                "snapshot_path": f"runs/{snap_run_id}/fb_map_by_stock.json"
-            })
-
-            # refresh map pour SOLD / PRICE_CHANGED
-            posts_db = get_posts_map(sb)
-
-        except Exception as e:
-            log_event(sb, "REBUILD_POSTS", "REBUILD_POSTS_FAIL", {"err": str(e)})
-            raise
-
-    # 1) Fetch listing pages (3 pages)
-    now = utc_now_iso()
-
-    urls: List[str] = []
-    pages_html: List[Tuple[int, str]] = []
+    # Fetch 3 listing pages (RAW)
     pages = [
         f"{BASE_URL}{INVENTORY_PATH}",
         f"{BASE_URL}{INVENTORY_PATH}?page=2",
         f"{BASE_URL}{INVENTORY_PATH}?page=3",
     ]
-    for idx, page in enumerate(pages, start=1):
-        html = SESSION.get(page, timeout=30).text
+
+    pages_html: List[Tuple[int, str]] = []
+    all_urls: List[str] = []
+
+    for idx, page_url in enumerate(pages, start=1):
+        try:
+            html = SESSION.get(page_url, timeout=30).text
+        except Exception as e:
+            html = ""
+            log_event(sb, "SCRAPE", "PAGE_FETCH_FAIL", {"page": page_url, "err": str(e), "run_id": run_id})
+
         pages_html.append((idx, html))
-        urls += parse_inventory_listing_urls(BASE_URL, INVENTORY_PATH, html)
+        if html:
+            try:
+                all_urls += parse_inventory_listing_urls(BASE_URL, INVENTORY_PATH, html)
+            except Exception as e:
+                log_event(sb, "SCRAPE", "PARSE_LISTING_FAIL", {"page": page_url, "err": str(e), "run_id": run_id})
 
-    urls = sorted(list(dict.fromkeys(urls)))
+    all_urls = sorted(list(dict.fromkeys(all_urls)))
 
-    run_id = _run_id_from_now(now)
-
+    # Upload RAW pages + DB raw_pages
     meta = {
         "run_id": run_id,
-        "base_url": BASE_URL,
-        "inventory_path": INVENTORY_PATH,
+        "ts": now,
         "pages": pages,
-        "count_urls": len(urls),
+        "urls_count": len(all_urls),
         "dry_run": DRY_RUN,
-        "force_stock": FORCE_STOCK,
+        "cache_stickers": CACHE_STICKERS,
+        "sticker_max": STICKER_MAX,
     }
+    upload_json_to_storage(sb, RAW_BUCKET, f"raw_pages/{run_id}/meta.json", meta, upsert=True)
 
-    # RAW audit: upload des 3 pages Kennebec
+    for page_no, html in pages_html:
+        data = (html or "").encode("utf-8")
+        storage_path = f"raw_pages/{run_id}/kennebec_page_{page_no}.html"
+        upload_bytes_to_storage(sb, RAW_BUCKET, storage_path, data, content_type="text/html; charset=utf-8", upsert=True)
+        try:
+            upsert_raw_page(sb, run_id, page_no, storage_path, data)
+        except Exception as e:
+            log_event(sb, "RAW", "RAW_PAGE_DB_FAIL", {"page_no": page_no, "err": str(e), "run_id": run_id})
+
     try:
-        upload_raw_pages(sb, run_id, pages_html, meta)
+        deleted = cleanup_storage_runs(sb, RAW_BUCKET, "raw_pages", keep=RAW_KEEP)
+        log_event(sb, "RAW", "RAW_CLEANUP", {"keep": RAW_KEEP, "deleted": deleted, "run_id": run_id})
     except Exception as e:
-        log_event(sb, "RAW_UPLOAD", "RAW_UPLOAD_FAIL", {
-            "err": str(e),
-            "run_id": run_id,
-            "bucket": RAW_BUCKET,
-        })
+        log_event(sb, "RAW", "RAW_CLEANUP_FAIL", {"err": str(e), "run_id": run_id})
 
+    # Parse inventory vehicles
     current: Dict[str, Dict[str, Any]] = {}
-    for url in urls:
-        d = parse_vehicle_detail_simple(SESSION, url)
+    for url in all_urls:
+        try:
+            d = parse_vehicle_detail_simple(SESSION, url)
+        except Exception as e:
+            log_event(sb, "SCRAPE", "DETAIL_FAIL", {"url": url, "err": str(e), "run_id": run_id})
+            continue
+
         stock = (d.get("stock") or "").strip().upper()
-        title = _clean_title((d.get("title") or "").strip())
+        title = _clean_title(d.get("title") or "")
         if not stock or not title:
             continue
+
         d["title"] = title
+        d["stock"] = stock
+        d["url"] = d.get("url") or url
+        d["vin"] = (d.get("vin") or "").strip().upper()
+        d["price_int"] = _clean_int(d.get("price_int"))
+        d["km_int"] = _clean_int(d.get("km_int"))
+
         slug = slugify(title, stock)
         d["slug"] = slug
         current[slug] = d
 
-    # ---- Build stock -> slug (inventaire Kennebec courant)
-    current_by_stock: Dict[str, str] = {}
-    for s_slug, v in current.items():
-        st = (v.get("stock") or "").strip().upper()
-        if st:
-            current_by_stock[st] = s_slug
+    inv_count = len(current)
+    upsert_scrape_run(sb, run_id, status="OK", note=f"inv_count={inv_count} urls={len(all_urls)}")
 
-    # ---- Assure fb_map + snap_run_id même si REBUILD=0
-    if not snap_run_id:
-        snap_run_id = utc_now_iso().replace(":", "").replace("-", "").split(".")[0]
+    meta["inventory_count"] = inv_count
+    upload_json_to_storage(sb, RAW_BUCKET, f"raw_pages/{run_id}/meta.json", meta, upsert=True)
 
-    if not fb_map:
-        # on lit le dernier snapshot fb_map_by_stock.json déjà stocké
-        latest_run = get_latest_snapshot_run_id(sb, SNAP_BUCKET)
-        if latest_run:
-            fb_map = read_json_from_storage(sb, SNAP_BUCKET, f"runs/{latest_run}/fb_map_by_stock.json") or {}
+    # Cache stickers for ALL inventory
+    vin_status: Dict[str, str] = {}
+    if CACHE_STICKERS:
+        vins = []
+        for v in current.values():
+            vin = (v.get("vin") or "").strip().upper()
+            if _is_stellantis_vin(vin):
+                vins.append(vin)
+        vins = list(dict.fromkeys(vins))[:max(0, STICKER_MAX)]
 
-    # ---- Construire index_by_stock pour CE run (post_id + prix Kennebec)
-    index_by_stock: Dict[str, Any] = {}
-    for stock, info in (fb_map or {}).items():
-        s = (stock or "").strip().upper()
-        slug = current_by_stock.get(s)
-        v = current.get(slug) if slug else None
-
-        index_by_stock[s] = {
-            "post_id": (info or {}).get("post_id"),
-            "published_at": (info or {}).get("published_at"),
-            "price_int": (v.get("price_int") if v else None),
-            "title": (v.get("title") if v else None),
-            "url": (v.get("url") if v else None),
-        }
-
-    sb.storage.from_(SNAP_BUCKET).upload(
-        f"runs/{snap_run_id}/index_by_stock.json",
-        json.dumps(index_by_stock, ensure_ascii=False, indent=2).encode("utf-8"),
-        file_options={"content-type": "application/json", "upsert": "true"},
-    )
-    print(f"✅ SNAPSHOT index_by_stock OK → runs/{snap_run_id}/index_by_stock.json ({len(index_by_stock)} stocks)")
-
-    # ---- Trouver le run précédent (2e plus récent) pour comparer les prix
-    def _get_prev_run_id(cur_run: str) -> str | None:
-        try:
-            items = sb.storage.from_(SNAP_BUCKET).list("runs") or []
-            names = sorted([it.get("name") for it in items if it.get("name")], reverse=True)
-            # enlever le run courant si présent
-            names = [n for n in names if n != cur_run]
-            return names[0] if names else None
-        except Exception:
-            return None
-    
-
-    # ---- PRICE DROPS (Kennebec baisse vs snapshot précédent)
-    # Toujours initialiser AVANT toute utilisation (anti UnboundLocalError)
-    price_drops: List[Tuple[str, int, int]] = []
-
-    prev_run = _get_prev_run_id(snap_run_id)
-    rev_index = (
-        read_json_from_storage(sb, SNAP_BUCKET, f"runs/{prev_run}/index_by_stock.json")
-        if prev_run else {}
-    )
-
-    for stock, cur in index_by_stock.items():
-        cur_price = cur.get("price_int")
-        old_price = (prev_index.get(stock) or {}).get("price_int")
-        if isinstance(cur_price, int) and isinstance(old_price, int) and cur_price < old_price:
-            price_drops.append((stock, old_price, cur_price))
-
-    print(f"PRICE_DROPS detected: {len(price_drops)} (prev_run={prev_run})")
-
-    # ---- appliquer les baisses de prix (update FB SANS text-engine)
-    or stock, old_price, new_price in price_drops:
-        info = index_by_stock.get(stock) or {}
-        post_id = info.get("post_id")
-        if not post_id:
-            continue
-
-        slug = current_by_stock.get(stock)
-        v = current.get(slug) if slug else {}
-
-        # Message simple, rapide, fiable (pas d'AI ici)
-        msg = (
-            "💥 NOUVEAU PRIX 💥\n\n"
-            f"Ancien prix : {old_price:,} $\n"
-            f"Nouveau prix : {new_price:,} $\n\n"
-            f"{v.get('url','')}"
-        )
-
-        if DRY_RUN:
-            print(f"DRY_RUN PRICE_DROP {stock}: {old_price} -> {new_price}")
-        else:
+        ok = bad = skip = 0
+        for vin in vins:
             try:
-                update_post_text(post_id, FB_TOKEN, msg)
-                log_event(
-                    sb,
-                    slug or stock,
-                    "PRICE_DROP_UPDATED",
-                    {"stock": stock, "post_id": post_id, "old": old_price, "new": new_price},
-                )
-                print(f"✅ UPDATED FB PRICE_DROP {stock}: {old_price} -> {new_price}")
+                res = ensure_sticker_cached(sb, vin, run_id)
+                st = (res.get("status") or "").lower()
+                vin_status[vin] = st
+                if st == "ok":
+                    ok += 1
+                elif st == "bad":
+                    bad += 1
+                else:
+                    skip += 1
             except Exception as e:
-                log_event(
-                    sb,
-                    slug or stock,
-                    "PRICE_DROP_UPDATE_FAIL",
-                    {"stock": stock, "post_id": post_id, "err": str(e)},
-                )
+                log_event(sb, "STICKER", "STICKER_FAIL", {"vin": vin, "err": str(e), "run_id": run_id})
 
+        log_event(sb, "STICKER", "STICKER_SUMMARY", {"ok": ok, "bad": bad, "skip": skip, "total": len(vins), "run_id": run_id})
 
-    current_slugs = set(current.keys())
-    db_slugs = set(inv_db.keys())
-
-    new_slugs = sorted(current_slugs - db_slugs)
-    disappeared_slugs = sorted(db_slugs - current_slugs)
-    common_slugs = sorted(current_slugs & db_slugs)
-
-    now = utc_now_iso()
-    
-    # RESTORE: si un véhicule réapparait sur Kennebec mais le post FB est marqué SOLD, on remet le texte original
-    for slug in common_slugs:
-        post = posts_db.get(slug) or {}
-        if (post.get("status") or "").upper() != "SOLD":
-            continue
-
-        post_id = post.get("post_id")
-        if not post_id:
-            continue
-
-        base_text = (post.get("base_text") or "").strip()
-
-        # Si on n'a pas encore base_text, on régénère (mieux que rien)
-        if not base_text:
-            v = current.get(slug) or {}
-            title_clean = _clean_title(v.get("title") or "")
-            vehicle_payload = {
-                "title": title_clean,
-                "price": "",
-                "mileage": "",
-                "stock": (v.get("stock") or "").strip().upper(),
-                "vin": (v.get("vin") or "").strip().upper(),
-                "url": v.get("url") or "",
-            }
-            base_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event="RESTORE_ACTIVE", vehicle=vehicle_payload) or ""
-            base_text = (base_text or "").rstrip()
-            markers = ["🔁 J’accepte les échanges", "📞 Daniel Giroux", "#DanielGiroux"]
-            if not any(m in base_text for m in markers):
-                base_text = base_text + dealer_footer()
-
-        base_text = strip_sold_banner(base_text)
-
-        if DRY_RUN:
-            log_event(sb, slug, "RESTORE_DRY_RUN", {"post_id": post_id})
-        else:
-            try:
-                update_post_text(post_id, FB_TOKEN, base_text)
-            except Exception as e:
-                log_event(sb, slug, "FB_RESTORE_FAIL", {"post_id": post_id, "err": str(e)})
-
-        upsert_post(sb, {
-            "slug": slug,
-            "post_id": post_id,
-            "status": "ACTIVE",
-            "sold_at": None,
-            "last_updated_at": utc_now_iso(),
-            "base_text": base_text,
-        })
-        log_event(sb, slug, "RESTORED_ACTIVE", {"post_id": post_id})
-    
-    # 3) Upsert inventory rows ACTIVE
+    # Upsert inventory ACTIVE
     rows = []
     for slug, v in current.items():
         rows.append({
             "slug": slug,
-            "stock": (v.get("stock") or "").strip().upper(),
-            "url": v.get("url") or "",
-            "title": v.get("title") or "",
-            "vin": (v.get("vin") or "").strip().upper(),
+            "stock": v.get("stock"),
+            "url": v.get("url"),
+            "title": v.get("title"),
+            "vin": v.get("vin"),
             "price_int": v.get("price_int"),
             "km_int": v.get("km_int"),
             "status": "ACTIVE",
@@ -827,7 +483,16 @@ def main() -> None:
         })
     upsert_inventory(sb, rows)
 
-    # 4) SOLD: disappeared -> update FB text (best-effort)
+    # SOLD detection
+    current_slugs = set(current.keys())
+    inv_db_active = {slug: r for slug, r in inv_db.items() if (r.get("status") or "").upper() == "ACTIVE"}
+    db_slugs = set(inv_db_active.keys())
+
+    disappeared_slugs = sorted(db_slugs - current_slugs)
+    new_slugs = sorted(current_slugs - db_slugs)
+    common_slugs = sorted(current_slugs & db_slugs)
+
+    # SOLD flow
     for slug in disappeared_slugs:
         post = posts_db.get(slug) or {}
         post_id = post.get("post_id")
@@ -837,168 +502,200 @@ def main() -> None:
                 print(f"DRY_RUN: would MARK SOLD -> {slug} (post_id={post_id})")
             else:
                 try:
-                    # 1) récupérer base_text (texte original) si on l'a
                     base_text = (post.get("base_text") or "").strip()
-
-                    # 2) si pas de base_text (vieux posts), on lit le message FB actuel et on le sauve
                     if not base_text:
-                        fb_current = fetch_fb_post_message(post_id, FB_TOKEN)
-                        base_text = strip_sold_banner(fb_current)
+                        fb_current = _fetch_fb_post_message(post_id)
+                        base_text = _strip_sold_banner(fb_current)
 
-                    # 3) on compose le message VENDU = bandeau + texte original
-                    msg = make_sold_message(base_text)
-
-                    # 4) update FB
+                    msg = _make_sold_message(base_text)
                     update_post_text(post_id, FB_TOKEN, msg)
 
-                    # 5) sauver le texte original en DB pour pouvoir RESTORE plus tard
                     upsert_post(sb, {
                         "slug": slug,
                         "post_id": post_id,
+                        "status": "SOLD",
+                        "sold_at": now,
+                        "last_updated_at": now,
                         "base_text": base_text,
-                        "last_updated_at": utc_now_iso(),
+                        "stock": post.get("stock"),
                     })
-
+                    log_event(sb, slug, "SOLD", {"post_id": post_id, "run_id": run_id})
                 except Exception as e:
-                    log_event(sb, slug, "FB_SOLD_UPDATE_FAIL", {"post_id": post_id, "err": str(e)})
+                    log_event(sb, slug, "FB_SOLD_FAIL", {"post_id": post_id, "err": str(e), "run_id": run_id})
 
-        upsert_post(sb, {
+        old_inv = inv_db.get(slug) or {}
+        upsert_inventory(sb, [{
             "slug": slug,
-            "post_id": post_id,
+            "stock": old_inv.get("stock"),
+            "url": old_inv.get("url"),
+            "title": old_inv.get("title"),
+            "vin": old_inv.get("vin"),
+            "price_int": old_inv.get("price_int"),
+            "km_int": old_inv.get("km_int"),
             "status": "SOLD",
-            "sold_at": now,
-            "last_updated_at": now,
-        })
-        log_event(sb, slug, "SOLD", {"slug": slug, "dry_run": DRY_RUN})
+            "last_seen": old_inv.get("last_seen") or now,
+            "updated_at": now,
+        }])
 
-    # 5) PRICE_CHANGED
+    # PRICE_CHANGED
     price_changed: List[str] = []
     for slug in common_slugs:
         old = inv_db.get(slug) or {}
         new = current.get(slug) or {}
-        if (old.get("price_int") is not None) and (new.get("price_int") is not None) and old.get("price_int") != new.get("price_int"):
+        if old.get("price_int") is not None and new.get("price_int") is not None and old.get("price_int") != new.get("price_int"):
             price_changed.append(slug)
 
-    # DEBUG: voir la réalité (sinon tu cherches dans le vide)
-    log_event(sb, "DIFF", "DIFF_COUNTS", {"new": len(new_slugs), "sold": len(disappeared_slugs), "price_changed": len(price_changed)})
+    # Snapshots index_by_stock
+    if not fb_map:
+        latest_run = get_latest_snapshot_run_id(sb, SNAP_BUCKET)
+        if latest_run:
+            fb_map = read_json_from_storage(sb, SNAP_BUCKET, f"runs/{latest_run}/fb_map_by_stock.json") or {}
 
-    # 6) Targets NEW + PRICE_CHANGED
-    # IMPORTANT: on priorise PRICE_CHANGED (sinon MAX_TARGETS coupe tout et tu ne le vois jamais)
+    current_by_stock: Dict[str, str] = {}
+    for s_slug, v in current.items():
+        st = (v.get("stock") or "").strip().upper()
+        if st:
+            current_by_stock[st] = s_slug
+
+    index_by_stock: Dict[str, Any] = {}
+    for stock, info in (fb_map or {}).items():
+        s = (stock or "").strip().upper()
+        slug = current_by_stock.get(s)
+        v = current.get(slug) if slug else None
+        index_by_stock[s] = {
+            "post_id": (info or {}).get("post_id"),
+            "published_at": (info or {}).get("published_at"),
+            "kennebec_price_int": (v.get("price_int") if v else None),
+            "kennebec_title": (v.get("title") if v else None),
+            "kennebec_url": (v.get("url") if v else None),
+        }
+
+    upload_json_to_storage(sb, SNAP_BUCKET, f"runs/{run_id}/index_by_stock.json", index_by_stock, upsert=True)
+    try:
+        cleanup_storage_runs(sb, SNAP_BUCKET, "runs", keep=SNAP_KEEP)
+    except Exception:
+        pass
+
+    # Targets
     targets: List[Tuple[str, str]] = [(s, "PRICE_CHANGED") for s in price_changed] + [(s, "NEW") for s in new_slugs]
 
-    # FORCE_PREVIEW by stock
     if FORCE_STOCK:
         forced_slug = None
         for s_slug, v_info in current.items():
             if (v_info.get("stock") or "").strip().upper() == FORCE_STOCK:
                 forced_slug = s_slug
                 break
-        if forced_slug:
-            targets = [(forced_slug, "FORCE_PREVIEW")]
-            print(f"FORCE_PREVIEW enabled for stock {FORCE_STOCK} -> {forced_slug}")
-        else:
-            print(f"FORCE_PREVIEW: stock {FORCE_STOCK} introuvable dans l’inventaire courant")
-            targets = []
+        targets = [(forced_slug, "FORCE_PREVIEW")] if forced_slug else []
 
-    # Throttle: limiter le nombre d'actions par run (sauf FORCE)
     if not FORCE_STOCK and MAX_TARGETS > 0:
         targets = targets[:MAX_TARGETS]
 
-    # 7) Process targets
+    # Process targets
     for slug, event in targets:
         v = current.get(slug) or {}
-
-        title_clean = _clean_title(v.get("title") or "")
-        if not title_clean:
-            log_event(sb, slug, "SKIP_BAD_DATA", {"reason": "title_invalid", "raw_title": v.get("title")})
+        stock = (v.get("stock") or "").strip().upper()
+        vin = (v.get("vin") or "").strip().upper()
+        title = _clean_title(v.get("title") or "")
+        if not stock or not title:
+            log_event(sb, slug, "SKIP_BAD_DATA", {"reason": "missing_stock_or_title", "run_id": run_id})
             continue
 
-        price_int = _clean_price_int(v.get("price_int"))
-        km_int = _clean_km(v.get("km_int"))
+        price_int = _clean_int(v.get("price_int"))
+        km_int = _clean_int(v.get("km_int"))
 
         vehicle_payload = {
-            "title": title_clean,
+            "title": title,
             "price": (f"{price_int:,}".replace(",", " ") + " $") if price_int else "",
             "mileage": (f"{km_int:,}".replace(",", " ") + " km") if km_int else "",
-            "stock": (v.get("stock") or "").strip().upper(),
-            "vin": (v.get("vin") or "").strip().upper(),
+            "stock": stock,
+            "vin": vin,
             "url": v.get("url") or "",
         }
 
-        vin_up = (v.get("vin") or "").strip().upper()
-        if _is_stellantis_vin(vin_up):
-            try:
-                ensure_sticker_cached(sb, vin_up, run_id=run_id)
-            except Exception as e:
-                log_event(sb, slug, "STICKER_CACHE_FAIL", {"vin": vin_up, "err": str(e), "run_id": run_id})
+        fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload).rstrip()
+        if "📞 Daniel Giroux" not in fb_text:
+            fb_text = fb_text + _dealer_footer()
 
-        fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload)
+        sticker_ok = False
+        if _is_stellantis_vin(vin):
+            sticker_ok = (vin_status.get(vin) == "ok")
 
-        base = (fb_text or "").rstrip()
-        markers = ["🔁 J’accepte les échanges", "📞 Daniel Giroux", "#DanielGiroux"]
-        if not any(m in base for m in markers):
-            fb_text = base + dealer_footer()
-        else:
-            fb_text = base
+        out_folder = "with" if sticker_ok else "without"
+        fb_out_path = f"{out_folder}/{stock}_facebook.txt"
+        mp_out_path = f"{out_folder}/{stock}_marketplace.txt"
+
+        upload_bytes_to_storage(sb, OUTPUTS_BUCKET, fb_out_path, (fb_text + "\n").encode("utf-8"),
+                               content_type="text/plain; charset=utf-8", upsert=True)
+        upload_bytes_to_storage(sb, OUTPUTS_BUCKET, mp_out_path, (fb_text + "\n").encode("utf-8"),
+                               content_type="text/plain; charset=utf-8", upsert=True)
+        upsert_output(sb, stock=stock, kind="text", facebook_path=fb_out_path, marketplace_path=mp_out_path, run_id=run_id)
 
         post_info = posts_db.get(slug) or {}
         post_id = post_info.get("post_id")
 
-        # IMPORTANT: si PRICE_CHANGED mais pas de post_id -> on SKIP (sinon duplicats)
-        if event == "PRICE_CHANGED" and not post_id:
-            log_event(sb, slug, "PRICE_CHANGED_SKIP_NO_POST_ID", {"reason": "missing_post_id"})
-            continue
-
         photo_urls = v.get("photos") or []
-        bad_kw = (
-            "credit", "crédit", "bail", "commercial",
-            "inspect", "inspecte", "inspecté", "inspection",
-            "garantie", "warranty",
-            "finance", "financement",
-            "promo", "promotion",
-            "banner", "banniere", "bannière",
-        )
+        bad_kw = ("credit", "crédit", "bail", "commercial", "inspect", "inspection", "garantie",
+                  "warranty", "finance", "financement", "promo", "promotion", "banner", "banniere", "bannière")
         photo_urls = [u for u in photo_urls if u and not any(k in u.lower() for k in bad_kw)]
+        photo_paths = _download_photos(stock, photo_urls, limit=MAX_PHOTOS)
 
-        stock_up = (v.get("stock") or "").strip().upper()
-        photo_paths = download_photos(stock_up, photo_urls, limit=MAX_PHOTOS)
+        ALLOW_NO_PHOTO = os.getenv("KENBOT_ALLOW_NO_PHOTO", "0").strip() == "1"
+        NO_PHOTO_BUCKET = (os.getenv("KENBOT_NO_PHOTO_BUCKET") or OUTPUTS_BUCKET).strip()
+        NO_PHOTO_PATH = (os.getenv("KENBOT_NO_PHOTO_PATH") or "assets/no_photo.png").strip()
 
+        if not photo_paths:
+            log_event(sb, slug, "NO_PHOTOS", {"stock": stock, "url": v.get("url"), "run_id": run_id})
+
+            if not ALLOW_NO_PHOTO:
+                print(f"SKIP {stock}: no photos (set KENBOT_ALLOW_NO_PHOTO=1)", flush=True)
+                continue
+
+            try:
+                blob = sb.storage.from_(NO_PHOTO_BUCKET).download(NO_PHOTO_PATH)
+            except Exception as e:
+                print(
+                    f"SKIP {stock}: cannot download placeholder {NO_PHOTO_BUCKET}/{NO_PHOTO_PATH} -> {e}",
+                    flush=True,
+                )
+                continue
+
+            tmp_placeholder = Path("/tmp") / "kenbot_no_photo.png"
+            tmp_placeholder.write_bytes(blob)
+
+            photo_paths = [tmp_placeholder]
+            fb_text = "📷 Photos suivront bientôt.\n\n" + fb_text
+    
         if DRY_RUN:
-            _preview_text(slug, event, fb_text)
-            log_event(sb, slug, event, {"dry_run": True, "photos": len(photo_paths), "post_id": post_id})
+            print(f"\n=== DRY_RUN {event}: {slug} ({stock}) ===\n{fb_text[:900]}\n")
+            log_event(sb, slug, event, {"dry_run": True, "photos": len(photo_paths), "post_id": post_id, "run_id": run_id})
             continue
 
-        did_action = False
+        if event == "PRICE_CHANGED" and not post_id:
+            log_event(sb, slug, "PRICE_CHANGED_SKIP_NO_POST_ID", {"run_id": run_id})
+            continue
 
         if not post_id:
-            # NEW
             main_photos = photo_paths[:POST_PHOTOS]
             extra_photos = photo_paths[POST_PHOTOS:MAX_PHOTOS]
-
-            media_ids = publish_photos_unpublished(FB_PAGE_ID, FB_TOKEN, main_photos, limit=POST_PHOTOS)
-            post_id = create_post_with_attached_media(FB_PAGE_ID, FB_TOKEN, fb_text, media_ids)
-
-            if extra_photos:
-                try:
+            try:
+                media_ids = publish_photos_unpublished(FB_PAGE_ID, FB_TOKEN, main_photos, limit=POST_PHOTOS)
+                post_id = create_post_with_attached_media(FB_PAGE_ID, FB_TOKEN, fb_text, media_ids)
+                if extra_photos:
                     publish_photos_as_comment_batch(FB_PAGE_ID, FB_TOKEN, post_id, extra_photos)
-                except Exception as e:
-                    log_event(sb, slug, "FB_EXTRA_PHOTOS_FAIL", {"post_id": post_id, "err": str(e)})
 
-            # ✅ upsert + base_text doivent être DANS le NEW
-            upsert_post(sb, {
-                "slug": slug,
-                "post_id": post_id,
-                "status": "ACTIVE",
-                "published_at": now,
-                "last_updated_at": now,
-                "base_text": fb_text,
-            })
-
-            log_event(sb, slug, "NEW", {"post_id": post_id, "photos": len(photo_paths), "run_id": run_id})
-            did_action = True
-
+                upsert_post(sb, {
+                    "slug": slug,
+                    "post_id": post_id,
+                    "status": "ACTIVE",
+                    "published_at": now,
+                    "last_updated_at": now,
+                    "base_text": fb_text,
+                    "stock": stock,
+                })
+                log_event(sb, slug, "FB_NEW_OK", {"post_id": post_id, "photos": len(photo_paths), "run_id": run_id})
+            except Exception as e:
+                log_event(sb, slug, "FB_NEW_FAIL", {"err": str(e), "run_id": run_id})
         else:
-            # PRICE_CHANGED (ou FORCE_PREVIEW si tu passes ici avec post_id)
             try:
                 update_post_text(post_id, FB_TOKEN, fb_text)
                 upsert_post(sb, {
@@ -1007,16 +704,17 @@ def main() -> None:
                     "status": "ACTIVE",
                     "last_updated_at": now,
                     "base_text": fb_text,
+                    "stock": stock,
                 })
-                log_event(sb, slug, event, {"post_id": post_id})
-                did_action = True
+                log_event(sb, slug, "FB_UPDATE_OK", {"post_id": post_id, "event": event, "run_id": run_id})
             except Exception as e:
-                log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "event": event})
+                log_event(sb, slug, "FB_UPDATE_FAIL", {"post_id": post_id, "err": str(e), "run_id": run_id})
 
-        if did_action and SLEEP_BETWEEN > 0:
+        if SLEEP_BETWEEN > 0:
             time.sleep(SLEEP_BETWEEN)
 
-    print(f"OK: NEW={len(new_slugs)} SOLD={len(disappeared_slugs)} PRICE_CHANGED={len(price_changed)}")
+    print(f"OK run_id={run_id} inv_count={inv_count} NEW={len(new_slugs)} SOLD={len(disappeared_slugs)} PRICE_CHANGED={len(price_changed)}")
+
 
 if __name__ == "__main__":
     main()
