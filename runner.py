@@ -613,8 +613,12 @@ def main() -> None:
         }
 
         fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload).rstrip()
+        # Anti-doublon footer : si DGText/sticker_to_ad a déjà mis le footer, on ne rajoute rien
+        has_footer = ("J’accepte les échanges" in fb_text) or ("📞 Daniel Giroux" in fb_text)
+
         if "📞 Daniel Giroux" not in fb_text:
             fb_text = fb_text + _dealer_footer()
+
 
         sticker_ok = False
         if _is_stellantis_vin(vin):

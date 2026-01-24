@@ -12,9 +12,7 @@ TIMEOUT = 20
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "Mozilla/5.0 (KenBot meta-vs-site supabase)"})
 
-RAW_BUCKET = os.getenv("SB_BUCKET_RAW", "kennebec-raw").strip()
 REPORTS_BUCKET = os.getenv("SB_BUCKET_OUTPUTS", "kennebec-outputs").strip()
-
 META_TABLE = "meta_feed_items"
 
 def norm_url(u: str) -> str:
@@ -87,7 +85,7 @@ def main():
 
     feed_path = os.getenv("META_FEED_CSV", "").strip()
     if not feed_path:
-        raise SystemExit("Set META_FEED_CSV=/path/to/meta_used.csv")
+        raise SystemExit("Set META_FEED_CSV=/path/to/meta_used_vehicles.csv")
 
     sb = get_client(supa_url, supa_key)
     now = utc_now_iso()
@@ -113,6 +111,7 @@ def main():
     for url, m in meta.items():
         up_rows.append({
             "url": url,
+            "stock": None,
             "vehicle_id": m.get("vehicle_id") or None,
             "meta_price_int": m.get("meta_price_int"),
             "last_seen": now,
@@ -158,7 +157,6 @@ def main():
     # 5) Save report in Supabase Storage (JSON + CSV)
     upload_json_to_storage(sb, REPORTS_BUCKET, f"reports/{run_id}/meta_vs_site.json", report, upsert=True)
 
-    # CSV bytes
     csv_lines = ["stock,url,site_price,meta_price,diff,action,vehicle_id_meta"]
     for r in report:
         csv_lines.append(
