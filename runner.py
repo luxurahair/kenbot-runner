@@ -3,6 +3,8 @@ import re
 import json
 import time
 import hashlib
+import csv
+import io
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -162,6 +164,28 @@ def _dealer_footer() -> str:
         "#AutoUsagée #VehiculeOccasion #DanielGiroux"
     )
 
+FOOTER_MARKERS = [
+    "j’accepte les échanges",
+    "j'accepte les échanges",
+    "financement",
+    "daniel giroux",
+    "418-222-3939",
+    "écris-moi en privé",
+    "ecris-moi en privé",
+    "#danielgiroux",
+]
+
+def ensure_single_footer(text: str, footer: str) -> str:
+    """
+    Ajoute le footer UNE SEULE FOIS.
+    Si le texte contient déjà des marqueurs (footer/cta/téléphone), on n'ajoute rien.
+    """
+    base = (text or "").rstrip()
+    low = base.lower()
+    if any(m in low for m in FOOTER_MARKERS):
+        return base
+    return f"{base}\n\n{footer}".strip()
+
 def _strip_sold_banner(txt: str) -> str:
     t = (txt or "").lstrip()
     if not t.startswith("🚨 VENDU 🚨"):
@@ -318,6 +342,61 @@ def ensure_sticker_cached(sb, vin: str, run_id: str) -> Dict[str, Any]:
     upload_bytes_to_storage(sb, STICKERS_BUCKET, bad_path, blob_store, content_type="application/pdf", upsert=True)
     upsert_sticker_pdf(sb, vin=vin, status="bad", storage_path=bad_path, data=blob_store, reason="invalid_pdf", run_id=run_id)
     return {"vin": vin, "status": "bad"}
+
+def build_meta_vehicle_feed_csv(current: dict) -> bytes:
+    """
+    Génère un feed Meta simple:
+    id,title,description,availability,condition,price,link,image_link,brand,year
+    """
+    fieldnames = ["id","title","description","availability","condition","price","link","image_link","brand","year"]
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=fieldnames)
+    w.writeheader()
+
+    for slug, v in (current or {}).items():
+        stock = (v.get("stock") or "").strip().upper()
+        url = (v.get("url") or "").strip()
+        title = (v.get("title") or "").strip()
+        price_int = v.get("price_int")
+
+        # fallback si price_int absent
+        if not isinstance(price_int, int):
+            p = (v.get("price") or "").strip()
+            digits = "".join(ch for ch in p if ch.isdigit())
+            price_int = int(digits) if digits else None
+
+        photos = v.get("photos") or []
+        image_link = (photos[0] or "").strip() if photos else ""
+
+        if not stock or not url or not title or not isinstance(price_int, int):
+            continue
+        if not image_link:
+            # Meta préfère une image publique; si tu veux, on met no_photo ici plus tard
+            continue
+
+        year = ""
+        m = re.search(r"\b(19\d{2}|20\d{2})\b", title)
+        if m:
+            year = m.group(1)
+
+        brand = (v.get("make") or "").strip()
+        if not brand:
+            brand = title.split(" ", 1)[0].strip()
+
+        w.writerow({
+            "id": stock,
+            "title": title,
+            "description": f"{title} | Stock {stock}",
+            "availability": "in stock",
+            "condition": "used",
+            "price": f"{price_int} CAD",
+            "link": url,
+            "image_link": image_link,
+            "brand": brand,
+            "year": year,
+        })
+
+    return buf.getvalue().encode("utf-8")
 
 # -------------------------
 # Main
@@ -545,6 +624,26 @@ def main() -> None:
         if old.get("price_int") is not None and new.get("price_int") is not None and old.get("price_int") != new.get("price_int"):
             price_changed.append(slug)
 
+    if os.getenv("KENBOT_BUILD_META_FEEDS", "0").strip() == "1":
+        feed_bytes = build_meta_vehicle_feed_csv(current)
+        upload_bytes_to_storage(
+            sb,
+            OUTPUTS_BUCKET,
+            "feeds/meta_vehicle.csv",
+            feed_bytes,
+            content_type="text/csv; charset=utf-8",
+            upsert=True,
+        )
+        upload_bytes_to_storage(
+            sb,
+            OUTPUTS_BUCKET,
+            f"runs/{run_id}/feeds/meta_vehicle.csv",
+            feed_bytes,
+            content_type="text/csv; charset=utf-8",
+            upsert=True,
+        )
+        print("✅ Uploaded Meta feed -> kennebec-outputs/feeds/meta_vehicle.csv", flush=True)
+
     # Snapshots index_by_stock
     if not fb_map:
         latest_run = get_latest_snapshot_run_id(sb, SNAP_BUCKET)
@@ -612,13 +711,10 @@ def main() -> None:
             "url": v.get("url") or "",
         }
 
-        fb_text = generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload).rstrip()
-        # Anti-doublon footer : si DGText/sticker_to_ad a déjà mis le footer, on ne rajoute rien
-        has_footer = ("J’accepte les échanges" in fb_text) or ("📞 Daniel Giroux" in fb_text)
-
-        if "📞 Daniel Giroux" not in fb_text:
-            fb_text = fb_text + _dealer_footer()
-
+        fb_text = ensure_single_footer(
+            generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload),
+            _dealer_footer(),
+        )
 
         sticker_ok = False
         if _is_stellantis_vin(vin):
@@ -667,7 +763,7 @@ def main() -> None:
             tmp_placeholder.write_bytes(blob)
 
             photo_paths = [tmp_placeholder]
-            fb_text = "📷 Photos suivront bientôt.\n\n" + fb_text
+            #fb_text = "📷 Photos suivront bientôt.\n\n" + fb_text
     
         if DRY_RUN:
             print(f"\n=== DRY_RUN {event}: {slug} ({stock}) ===\n{fb_text[:900]}\n")
