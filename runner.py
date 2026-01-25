@@ -165,13 +165,13 @@ def _dealer_footer() -> str:
     )
 
 FOOTER_MARKERS = [
-    "j’accepte les échanges",
-    "j'accepte les échanges",
-    "financement",
-    "daniel giroux",
-    "418-222-3939",
-    "écris-moi en privé",
-    "ecris-moi en privé",
+    "j’accepte", "j'accepte",
+    "échange", "echange",
+    "financement", "finance",
+    "daniel", "giroux",
+    "418", "222", "3939",
+    "écris-moi", "ecris-moi",
+    "en privé", "en prive",
     "#danielgiroux",
 ]
 
@@ -678,6 +678,23 @@ def main() -> None:
     # Targets
     targets: List[Tuple[str, str]] = [(s, "PRICE_CHANGED") for s in price_changed] + [(s, "NEW") for s in new_slugs]
 
+    # Flags
+    BUILD_ALL_OUTPUTS = os.getenv("KENBOT_BUILD_ALL_OUTPUTS", "0").strip() == "1"
+    PUBLISH_MISSING = os.getenv("KENBOT_PUBLISH_MISSING", "0").strip() == "1"
+
+    # Build pdf_ok_vins from storage (source of truth)
+    STICKER_BUCKET = os.getenv("KENBOT_STICKER_BUCKET", "kennebec-stickers").strip()
+    pdf_ok_vins: set[str] = set()
+    try:
+        for o in (sb.storage.from_(STICKER_BUCKET).list("pdf_ok") or []):
+            name = (o.get("name") or "")
+            if name.lower().endswith(".pdf"):
+                pdf_ok_vins.add(name[:-4].upper())  # strip .pdf
+        print(f"STICKERS pdf_ok_vins={len(pdf_ok_vins)}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Cannot list {STICKER_BUCKET}/pdf_ok: {e}", flush=True)
+
+    # FORCE_STOCK (priorité #1)
     if FORCE_STOCK:
         forced_slug = None
         for s_slug, v_info in current.items():
@@ -686,7 +703,23 @@ def main() -> None:
                 break
         targets = [(forced_slug, "FORCE_PREVIEW")] if forced_slug else []
 
-    if not FORCE_STOCK and MAX_TARGETS > 0:
+    # BUILD_ALL_OUTPUTS (priorité #2)
+    elif BUILD_ALL_OUTPUTS:
+        targets = [(s, "BUILD_OUTPUT") for s in current.keys()]
+        print(f"BUILD_ALL_OUTPUTS enabled: targets={len(targets)}", flush=True)
+
+    # PUBLISH_MISSING (priorité #3)
+    elif PUBLISH_MISSING:
+        missing = []
+        for s_slug in current.keys():
+            info = posts_db.get(s_slug) or {}
+            if not info.get("post_id"):
+                missing.append(s_slug)
+        targets = [(s, "MISSING_POST") for s in missing]
+        print(f"PUBLISH_MISSING enabled: missing_posts={len(missing)}", flush=True)
+
+    # Limite targets (mais PAS en BUILD_ALL_OUTPUTS)
+    if not FORCE_STOCK and MAX_TARGETS > 0 and not BUILD_ALL_OUTPUTS:
         targets = targets[:MAX_TARGETS]
 
     # Process targets
@@ -716,18 +749,19 @@ def main() -> None:
             _dealer_footer(),
         )
 
-        sticker_ok = False
-        if _is_stellantis_vin(vin):
-            sticker_ok = (vin_status.get(vin) == "ok")
-
-        out_folder = "with" if sticker_ok else "without"
+        # with/without = pdf_ok (source of truth)
+        out_folder = "with" if (vin and vin in pdf_ok_vins) else "without"
         fb_out_path = f"{out_folder}/{stock}_facebook.txt"
         mp_out_path = f"{out_folder}/{stock}_marketplace.txt"
 
-        upload_bytes_to_storage(sb, OUTPUTS_BUCKET, fb_out_path, (fb_text + "\n").encode("utf-8"),
-                               content_type="text/plain; charset=utf-8", upsert=True)
-        upload_bytes_to_storage(sb, OUTPUTS_BUCKET, mp_out_path, (fb_text + "\n").encode("utf-8"),
-                               content_type="text/plain; charset=utf-8", upsert=True)
+        upload_bytes_to_storage(
+            sb, OUTPUTS_BUCKET, fb_out_path, (fb_text + "\n").encode("utf-8"),
+            content_type="text/plain; charset=utf-8", upsert=True
+        )
+        upload_bytes_to_storage(
+            sb, OUTPUTS_BUCKET, mp_out_path, (fb_text + "\n").encode("utf-8"),
+            content_type="text/plain; charset=utf-8", upsert=True
+        )
         upsert_output(sb, stock=stock, kind="text", facebook_path=fb_out_path, marketplace_path=mp_out_path, run_id=run_id)
 
         post_info = posts_db.get(slug) or {}
