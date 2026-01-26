@@ -1,177 +1,150 @@
 #!/usr/bin/env python3
 import os, csv, re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from urllib.parse import urlsplit, urlunsplit
+
+from dotenv import load_dotenv
+load_dotenv()
 
 import requests
 from bs4 import BeautifulSoup
 
-from supabase_db import get_client, upload_json_to_storage, upload_bytes_to_storage, utc_now_iso
+from supabase_db import get_client, upload_bytes_to_storage, utc_now_iso
 
-TIMEOUT = 20
+TIMEOUT = 25
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "Mozilla/5.0 (KenBot meta-vs-site supabase)"})
 
-REPORTS_BUCKET = os.getenv("SB_BUCKET_OUTPUTS", "kennebec-outputs").strip()
-META_TABLE = "meta_feed_items"
+OUTPUTS_BUCKET = os.getenv("SB_BUCKET_OUTPUTS", "kennebec-outputs").strip()
+META_FEED_PATH = os.getenv("KENBOT_META_FEED_PATH", "feeds/meta_vehicle.csv").strip()
+REPORT_PATH = os.getenv("KENBOT_META_REPORT_PATH", "reports/meta_vs_site.csv").strip()
+
+BASE_URL = (os.getenv("KENBOT_BASE_URL") or "https://www.kennebecdodge.ca").strip().rstrip("/")
+
 
 def norm_url(u: str) -> str:
+    u = (u or "").strip()
     if not u:
         return ""
-    u = u.strip().strip('"').strip("'").rstrip(",")
-    p = urlsplit(u)
-    return urlunsplit((p.scheme, p.netloc, p.path.rstrip("/"), "", ""))
+    try:
+        p = urlsplit(u)
+        scheme = (p.scheme or "https").lower()
+        netloc = p.netloc.lower()
+        path = re.sub(r"/+$", "", p.path or "")
+        return urlunsplit((scheme, netloc, path, "", ""))
+    except Exception:
+        return u.strip()
 
-def norm_money(x: Any) -> Optional[int]:
-    if x is None:
-        return None
-    s = str(x).strip()
+
+def _to_int(s: str) -> Optional[int]:
+    s = (s or "").strip()
     if not s:
         return None
-    s = s.replace("$", "").replace(" ", "").replace(",", "")
-    m = re.search(r"(\d+)", s)
-    return int(m.group(1)) if m else None
+    digits = "".join(ch for ch in s if ch.isdigit())
+    return int(digits) if digits else None
+
+
+def load_meta_feed_from_storage(sb) -> List[Dict[str, Any]]:
+    blob = sb.storage.from_(OUTPUTS_BUCKET).download(META_FEED_PATH)
+    txt = blob.decode("utf-8", errors="replace")
+    r = csv.DictReader(txt.splitlines())
+    rows = []
+    for row in r:
+        # normalize keys
+        rows.append({k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()})
+    return rows
+
 
 def fetch_site_price(url: str) -> Optional[int]:
     url = norm_url(url)
-    r = SESSION.get(url, timeout=TIMEOUT)
-    r.raise_for_status()
-    html = r.text
-
-    m = re.search(r"displayedPrice\s*[:=]\s*['\"]([0-9]+(?:\.[0-9]+)?)['\"]", html, re.IGNORECASE)
-    if m:
-        try:
-            return int(float(m.group(1)))
-        except Exception:
-            pass
+    if not url:
+        return None
+    try:
+        r = SESSION.get(url, timeout=TIMEOUT)
+        if not r.ok:
+            return None
+        html = r.text or ""
+    except Exception:
+        return None
 
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
+    text = soup.get_text(" ", strip=True)
 
-    for txt in soup.find_all(string=re.compile(r"\$", re.IGNORECASE)):
-        t = re.sub(r"\s+", " ", str(txt)).strip()
-        mm = re.search(r"(\d[\d\s.,]{2,})\s*\$", t)
-        if mm:
-            return norm_money(mm.group(1))
+    # Cherche un prix type "23 995" proche de "$"
+    m = re.search(r"(\d[\d\s]{2,})\s*\$", text)
+    if m:
+        return _to_int(m.group(1))
+
+    # fallback: n'importe quel gros nombre (risqué mais mieux que rien)
+    m2 = re.search(r"\b(\d{2,3}\s?\d{3})\b", text)
+    if m2:
+        return _to_int(m2.group(1))
+
     return None
 
-def read_meta_feed_csv(path: str) -> Dict[str, Dict[str, Any]]:
-    """
-    CSV Meta: colonnes typiques: url/link, sale_price/price, vehicle_id/id
-    Indexé par url normalisée.
-    """
-    data: Dict[str, Dict[str, Any]] = {}
-    with open(path, "r", encoding="utf-8-sig", newline="") as f:
-        r = csv.DictReader(f)
-        for row in r:
-            url = norm_url(row.get("url") or row.get("link") or "")
-            if not url:
-                continue
-            price = norm_money(row.get("sale_price") or row.get("price"))
-            if price is None:
-                continue
-            data[url] = {
-                "meta_price_int": price,
-                "vehicle_id": (row.get("vehicle_id") or row.get("id") or "").strip(),
-            }
-    return data
 
 def main():
-    supa_url = os.getenv("SUPABASE_URL")
-    supa_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    if not supa_url or not supa_key:
-        raise SystemExit("Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY")
+    sb = get_client()
 
-    feed_path = os.getenv("META_FEED_CSV", "").strip()
-    if not feed_path:
-        raise SystemExit("Set META_FEED_CSV=/path/to/meta_used_vehicles.csv")
+    # 1) Lire feed Meta depuis Supabase Storage
+    meta_rows = load_meta_feed_from_storage(sb)
+    if not meta_rows:
+        raise RuntimeError(f"Meta feed empty: {OUTPUTS_BUCKET}/{META_FEED_PATH}")
 
-    sb = get_client(supa_url, supa_key)
-    now = utc_now_iso()
-    run_id = re.sub(r"[^0-9]", "", now)[:14]
+    out_rows: List[Dict[str, Any]] = []
+    checked = 0
 
-    # 1) Load inventory from Supabase
-    inv_rows = sb.table("inventory").select("slug,stock,url,price_int,status,vin").execute().data or []
-    inv = []
-    for r in inv_rows:
-        if (r.get("status") or "").upper() != "ACTIVE":
-            continue
-        url = norm_url(r.get("url") or "")
-        stock = (r.get("stock") or "").strip().upper()
-        if not url or not stock:
-            continue
-        inv.append({"stock": stock, "url": url, "site_price_int": r.get("price_int")})
-
-    # 2) Load Meta feed CSV
-    meta = read_meta_feed_csv(feed_path)
-
-    # 3) Upsert Meta base table
-    up_rows = []
-    for url, m in meta.items():
-        up_rows.append({
-            "url": url,
-            "stock": None,
-            "vehicle_id": m.get("vehicle_id") or None,
-            "meta_price_int": m.get("meta_price_int"),
-            "last_seen": now,
-            "updated_at": now,
-        })
-    if up_rows:
-        sb.table(META_TABLE).upsert(up_rows, on_conflict="url").execute()
-
-    # 4) Compare
-    report = []
-    for it in inv:
-        url = it["url"]
-        stock = it["stock"]
-        site_price = it["site_price_int"]
-
-        meta_row = meta.get(url)
-        if not meta_row:
-            report.append({
-                "stock": stock,
-                "url": url,
-                "site_price": site_price,
-                "meta_price": None,
-                "diff": None,
-                "action": "META_MISSING",
-                "vehicle_id_meta": None,
-            })
+    for row in meta_rows:
+        stock = (row.get("id") or row.get("stock") or "").strip().upper()
+        link = norm_url(row.get("link") or row.get("url") or "")
+        meta_price = _to_int(row.get("price") or "")
+        if not stock or not link:
             continue
 
-        meta_price = meta_row["meta_price_int"]
-        diff = (site_price - meta_price) if (site_price is not None and meta_price is not None) else None
-        action = "OK" if diff == 0 else "PRICE_MISMATCH"
+        checked += 1
+        site_price = fetch_site_price(link)
 
-        report.append({
+        status = "OK"
+        if site_price is None:
+            status = "MISSING_ON_SITE"
+        elif meta_price is None:
+            status = "META_PRICE_MISSING"
+        elif meta_price != site_price:
+            status = "PRICE_MISMATCH"
+
+        out_rows.append({
+            "ts": utc_now_iso(),
             "stock": stock,
-            "url": url,
-            "site_price": site_price,
-            "meta_price": meta_price,
-            "diff": diff,
-            "action": action,
-            "vehicle_id_meta": meta_row.get("vehicle_id") or None,
+            "link": link,
+            "meta_price_int": meta_price,
+            "site_price_int": site_price,
+            "status": status,
         })
 
-    # 5) Save report in Supabase Storage (JSON + CSV)
-    upload_json_to_storage(sb, REPORTS_BUCKET, f"reports/{run_id}/meta_vs_site.json", report, upsert=True)
+    # 2) Écrire report CSV
+    fieldnames = ["ts", "stock", "link", "meta_price_int", "site_price_int", "status"]
+    lines = []
+    lines.append(",".join(fieldnames))
+    for r in out_rows:
+        def esc(x):
+            s = "" if x is None else str(x)
+            s = s.replace('"', '""')
+            return f'"{s}"' if ("," in s or "\n" in s) else s
+        lines.append(",".join(esc(r.get(k)) for k in fieldnames))
 
-    csv_lines = ["stock,url,site_price,meta_price,diff,action,vehicle_id_meta"]
-    for r in report:
-        csv_lines.append(
-            f"{r['stock']},{r['url']},{r['site_price'] or ''},{r['meta_price'] or ''},{r['diff'] if r['diff'] is not None else ''},{r['action']},{r['vehicle_id_meta'] or ''}"
-        )
-    csv_bytes = ("\n".join(csv_lines) + "\n").encode("utf-8")
-    upload_bytes_to_storage(sb, REPORTS_BUCKET, f"reports/{run_id}/meta_vs_site.csv", csv_bytes, content_type="text/csv; charset=utf-8", upsert=True)
+    report_csv = "\n".join(lines) + "\n"
 
-    print(f"✅ meta_vs_site report uploaded -> {REPORTS_BUCKET}/reports/{run_id}/meta_vs_site.csv")
-    print("Counts:", {
-        "inventory_active": len(inv),
-        "meta_rows": len(meta),
-        "mismatch": sum(1 for r in report if r["action"] == "PRICE_MISMATCH"),
-        "missing": sum(1 for r in report if r["action"] == "META_MISSING"),
-    })
+    upload_bytes_to_storage(
+        sb,
+        OUTPUTS_BUCKET,
+        REPORT_PATH,
+        report_csv.encode("utf-8"),
+        content_type="text/csv; charset=utf-8",
+        upsert=True,
+    )
+
+    print(f"✅ Report uploaded -> {OUTPUTS_BUCKET}/{REPORT_PATH} (rows={len(out_rows)}, checked={checked})")
+
 
 if __name__ == "__main__":
     main()
