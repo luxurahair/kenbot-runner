@@ -1,12 +1,13 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from supabase import create_client, Client
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 import json
 import hashlib
 
-import os
-from dotenv import load_dotenv
-load_dotenv()
 
 # =========================
 # Time
