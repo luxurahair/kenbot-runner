@@ -4,6 +4,9 @@ from datetime import datetime, timezone
 import json
 import hashlib
 
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 # =========================
 # Time
@@ -94,16 +97,20 @@ def cleanup_storage_runs(sb: Client, bucket: str, folder: str, keep: int = 2) ->
 # =========================
 # Client
 # =========================
-def get_client(url: str, key: str) -> Client:
+from supabase import create_client, Client
+
+def get_client(url: str | None = None, key: str | None = None) -> Client:
+    # fallback env si non fourni
+    url = (url or os.getenv("SUPABASE_URL") or "").strip()
+    key = (key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+
     if not url or not key:
-        raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY manquants.")
+        raise RuntimeError("Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY")
 
-    base = url.strip().rstrip("/")  # base sans slash
-
-    # Crée le client
+    base = url.rstrip("/")  # base sans slash
     sb = create_client(base, key)
 
-    # Force le endpoint Storage avec slash (évite le warning)
+    # Force endpoint storage avec slash (évite warnings)
     try:
         sb.storage_url = f"{base}/storage/v1/"
     except Exception:
