@@ -153,23 +153,23 @@ def _clean_int(x) -> Optional[int]:
 
 def _dealer_footer() -> str:
     return (
-        "\n\n🔁 J’accepte les échanges : 🚗 auto • 🏍️ moto • 🛥️ bateau • 🛻 VTT • 🏁 côte-à-côte\n"
-        "📸 Envoie-moi les photos + infos de ton échange (année / km / paiement restant) → je te reviens vite.\n\n"
-        "👋 Publiée par Daniel Giroux — je réponds vite (pas un robot, promis 😄)\n"
+        "\n"
+        "🔁 J’accepte les échanges : 🚗 auto • 🏍️ moto • 🛥️ bateau • 🛻 VTT • 🏁 côte-à-côte\n"
+        "📸 Envoie-moi les photos + infos (année / km / paiement restant) → je te reviens vite.\n"
         "📍 Saint-Georges (Beauce) | Prise de possession rapide possible\n"
-        "📄 Vente commerciale — 2 taxes applicables\n\n"
-        "📩 Écris-moi en privé\n"
-        "📞 Daniel Giroux — 418-222-3939\n\n"
-        "#RAM #Truck #Pickup #ProMaster #Cargo #Van #RAM1500 #Beauce #SaintGeorges #Quebec "
-        "#AutoUsagée #VehiculeOccasion #DanielGiroux"
+        "📄 Vente commerciale — 2 taxes applicables\n"
+        "✅ Inspection complète — véhicule propre & prêt à partir.\n"
+        "📩 Écris-moi en privé — réponse rapide\n"
+        "📞 Daniel Giroux — 418-222-3939\n"
+        "[[DG_FOOTER]]"
     )
 
 FOOTER_MARKERS = [
     "j’accepte", "j'accepte",
     "échange", "echange",
     "financement", "finance",
-    "daniel", "giroux",
-    "418", "222", "3939",
+    "daniel giroux",
+    "418-222-3939", "418 222 3939",
     "écris-moi", "ecris-moi",
     "en privé", "en prive",
     "#danielgiroux",
@@ -178,13 +178,107 @@ FOOTER_MARKERS = [
 def ensure_single_footer(text: str, footer: str) -> str:
     """
     Ajoute le footer UNE SEULE FOIS.
-    Si le texte contient déjà des marqueurs (footer/cta/téléphone), on n'ajoute rien.
+    - Si le texte contient [[DG_FOOTER]] => footer déjà présent.
+    - Sinon si le texte contient des marqueurs de footer/cta => on n'ajoute pas.
     """
     base = (text or "").rstrip()
     low = base.lower()
+
+    # Marqueur officiel du runner (béton)
+    if "[[dg_footer]]" in low:
+        return base
+
+    # Filet de sécurité (DGText peut déjà avoir un CTA)
     if any(m in low for m in FOOTER_MARKERS):
         return base
+
     return f"{base}\n\n{footer}".strip()
+
+def _has_hashtags(txt: str) -> bool:
+    t = (txt or "")
+    return "#" in t
+
+def smart_hashtags(make: str = "", model: str = "", title: str = "", body: str = "") -> str:
+    """
+    Hashtags "intelligents" basés sur marque/modèle + signaux (4x4, camion, VUS, hybride, EV).
+    Sans web: on vise des tags stables + tags modèle populaires.
+    """
+    mk = (make or "").strip().lower()
+    md = (model or "").strip().lower()
+    t = f"{title} {body}".lower()
+
+    tags = [
+        "#KennebecDodge", "#StGeorges", "#Beauce",
+        "#AutoUsagée", "#Occasion", "#VéhiculeDoccasion",
+        "#FinancementAuto", "#TradeIn", "#LivraisonRapide",
+    ]
+
+    # Signaux / catégories
+    if any(x in t for x in ["4x4", "awd", "4wd", "quatre roues motrices"]):
+        tags += ["#4x4", "#AWD", "#HiverQC"]
+    if any(x in t for x in ["camion", "truck", "pickup", "boite", "remorquage", "towing"]):
+        tags += ["#Camion", "#Pickup", "#TruckLife"]
+    if any(x in t for x in ["vus", "suv", "cuv"]):
+        tags += ["#SUV", "#VUS"]
+    if any(x in t for x in ["hybride", "hybrid"]):
+        tags += ["#Hybride", "#ÉconomieEssence"]
+    if any(x in t for x in ["électrique", "electric", "ev"]):
+        tags += ["#Électrique", "#EV"]
+
+    # Marques populaires (stable)
+    brand_map = {
+        "ram": ["#RAM", "#RamTruck"],
+        "jeep": ["#Jeep", "#JeepLife"],
+        "dodge": ["#Dodge"],
+        "chrysler": ["#Chrysler"],
+        "toyota": ["#Toyota"],
+        "honda": ["#Honda"],
+        "ford": ["#Ford"],
+        "chevrolet": ["#Chevrolet"],
+        "gmc": ["#GMC"],
+        "mazda": ["#Mazda"],
+        "subaru": ["#Subaru"],
+        "hyundai": ["#Hyundai"],
+        "kia": ["#Kia"],
+        "nissan": ["#Nissan"],
+        "bmw": ["#BMW"],
+        "mercedes": ["#Mercedes"],
+        "audi": ["#Audi"],
+        "volkswagen": ["#Volkswagen"],
+    }
+    for key, extra in brand_map.items():
+        if key and key in mk:
+            tags += extra
+            break
+
+    # Modèles "aimants" (stables, très recherchés côté occasion)
+    model_map = {
+        "wrangler": ["#Wrangler", "#JeepWrangler"],
+        "grand cherokee": ["#GrandCherokee"],
+        "cherokee": ["#Cherokee"],
+        "compass": ["#JeepCompass"],
+        "gladiator": ["#JeepGladiator"],
+        "ram 1500": ["#Ram1500"],
+        "ram 2500": ["#Ram2500"],
+        "promaster": ["#ProMaster"],
+        "charger": ["#DodgeCharger"],
+        "challenger": ["#DodgeChallenger"],
+        "pacifica": ["#ChryslerPacifica"],
+    }
+
+    full = f"{md} {t}"
+    for k, extra in model_map.items():
+        if k in full:
+            tags += extra
+
+    # Dedupe + limite
+    out, seen = [], set()
+    for tag in tags:
+        if tag not in seen:
+            out.append(tag)
+            seen.add(tag)
+
+    return " ".join(out[:18])
 
 def _strip_sold_banner(txt: str) -> str:
     t = (txt or "").lstrip()
@@ -748,6 +842,12 @@ def main() -> None:
             generate_facebook_text(TEXT_ENGINE_URL, slug=slug, event=event, vehicle=vehicle_payload),
             _dealer_footer(),
         )
+    
+        # Hashtags: si DGText en a déjà, on ne touche pas.
+        if not _has_hashtags(fb_text):
+            fb_text = (fb_text.rstrip() + "\n\n" + smart_hashtags(
+                v.get("make", ""), v.get("model", ""), title=title, body=fb_text
+            )).strip()
 
         # with/without = pdf_ok (source of truth)
         out_folder = "with" if (vin and vin in pdf_ok_vins) else "without"
@@ -797,7 +897,7 @@ def main() -> None:
             tmp_placeholder.write_bytes(blob)
 
             photo_paths = [tmp_placeholder]
-            #fb_text = "📷 Photos suivront bientôt.\n\n" + fb_text
+            # fb_text = "📷 Photos suivront bientôt.\n\n" + fb_text
     
         if DRY_RUN:
             print(f"\n=== DRY_RUN {event}: {slug} ({stock}) ===\n{fb_text[:900]}\n")
