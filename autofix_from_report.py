@@ -1,5 +1,8 @@
 # autofix_from_report.py
 import os, csv, time
+from dotenv import load_dotenv
+load_dotenv()
+
 from supabase_db import get_client, get_posts_map, upsert_post, log_event
 from fb_api import update_post_text
 from runner import _make_sold_message  # si import possible; sinon on recopie la fonction
