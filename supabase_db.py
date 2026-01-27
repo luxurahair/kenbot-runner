@@ -188,7 +188,10 @@ def upload_bytes_to_storage(
     sb.storage.from_(bucket).upload(
         path,
         data,
-        file_options={"content-type": content_type, "upsert": upsert},
+        file_options={
+            "content-type": content_type,
+            "upsert": "true" if upsert else "false",
+        },
     )
 
 def upload_json_to_storage(
