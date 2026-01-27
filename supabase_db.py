@@ -167,4 +167,94 @@ def upsert_output(
         },
         on_conflict="stock,kind",
     ).execute()
+# =========================
+# Storage helpers (RESTORED)
+# =========================
+import json
+from typing import Any, Optional
+
+def upload_bytes_to_storage(
+    sb,
+    bucket: str,
+    path: str,
+    data: bytes,
+    content_type: str = "application/octet-stream",
+    upsert: bool = True,
+) -> None:
+    bucket = (bucket or "").strip()
+    path = (path or "").lstrip("/")
+    if not bucket or not path:
+        raise ValueError("upload_bytes_to_storage: missing bucket/path")
+    sb.storage.from_(bucket).upload(
+        path,
+        data,
+        file_options={"content-type": content_type, "upsert": upsert},
+    )
+
+def upload_json_to_storage(
+    sb,
+    bucket: str,
+    path: str,
+    obj: Any,
+    upsert: bool = True,
+) -> None:
+    b = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+    upload_bytes_to_storage(
+        sb,
+        bucket,
+        path,
+        b,
+        content_type="application/json; charset=utf-8",
+        upsert=upsert,
+    )
+
+def read_json_from_storage(
+    sb,
+    bucket: str,
+    path: str,
+) -> Optional[Any]:
+    bucket = (bucket or "").strip()
+    path = (path or "").lstrip("/")
+    if not bucket or not path:
+        return None
+    try:
+        blob = sb.storage.from_(bucket).download(path)
+    except Exception:
+        return None
+    try:
+        return json.loads(blob.decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+
+def cleanup_storage_runs(
+    sb,
+    bucket: str,
+    prefix: str,
+    keep: int = 5,
+) -> None:
+    """
+    Supprime les vieux dossiers runs/<run_id>/ en gardant les `keep` plus récents.
+    prefix typique: "runs"
+    """
+    bucket = (bucket or "").strip()
+    prefix = (prefix or "").strip().strip("/")
+    if not bucket or not prefix or keep <= 0:
+        return
+
+    items = sb.storage.from_(bucket).list(prefix) or []
+    names = sorted(
+        [it.get("name") for it in items if it and it.get("name")],
+        reverse=True,
+    )
+    old = names[keep:]
+    for run_id in old:
+        sub_prefix = f"{prefix}/{run_id}"
+        sub_items = sb.storage.from_(bucket).list(sub_prefix) or []
+        paths = []
+        for it in sub_items:
+            n = it.get("name")
+            if n:
+                paths.append(f"{sub_prefix}/{n}")
+        if paths:
+            sb.storage.from_(bucket).remove(paths)
 
