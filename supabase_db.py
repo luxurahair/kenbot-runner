@@ -167,11 +167,13 @@ def upsert_output(
         },
         on_conflict="stock,kind",
     ).execute()
+
 # =========================
 # Storage helpers (RESTORED)
 # =========================
 import json
-from typing import Any, Optional
+from typing import Any, Optional, List
+
 
 def upload_bytes_to_storage(
     sb,
@@ -185,14 +187,16 @@ def upload_bytes_to_storage(
     path = (path or "").lstrip("/")
     if not bucket or not path:
         raise ValueError("upload_bytes_to_storage: missing bucket/path")
+
     sb.storage.from_(bucket).upload(
         path,
         data,
         file_options={
             "content-type": content_type,
-            "upsert": "true" if upsert else "false",
+            "upsert": "true" if upsert else "false",  # IMPORTANT: str, pas bool
         },
     )
+
 
 def upload_json_to_storage(
     sb,
@@ -210,6 +214,7 @@ def upload_json_to_storage(
         content_type="application/json; charset=utf-8",
         upsert=upsert,
     )
+
 
 def read_json_from_storage(
     sb,
@@ -229,6 +234,7 @@ def read_json_from_storage(
     except Exception:
         return None
 
+
 def cleanup_storage_runs(
     sb,
     bucket: str,
@@ -236,28 +242,66 @@ def cleanup_storage_runs(
     keep: int = 5,
 ) -> None:
     """
-    Supprime les vieux dossiers runs/<run_id>/ en gardant les `keep` plus récents.
-    prefix typique: "runs"
+    Supprime les vieux runs dans Storage (bucket/prefix/<run_id>/...)
+    En gardant les `keep` plus récents.
     """
     bucket = (bucket or "").strip()
     prefix = (prefix or "").strip().strip("/")
     if not bucket or not prefix or keep <= 0:
         return
 
-    items = sb.storage.from_(bucket).list(prefix) or []
-    names = sorted(
+    try:
+        items = sb.storage.from_(bucket).list(prefix) or []
+    except Exception:
+        return
+
+    run_ids = sorted(
         [it.get("name") for it in items if it and it.get("name")],
         reverse=True,
     )
-    old = names[keep:]
-    for run_id in old:
-        sub_prefix = f"{prefix}/{run_id}"
-        sub_items = sb.storage.from_(bucket).list(sub_prefix) or []
-        paths = []
+    old = run_ids[keep:]
+    for rid in old:
+        sub_prefix = f"{prefix}/{rid}"
+        try:
+            sub_items = sb.storage.from_(bucket).list(sub_prefix) or []
+        except Exception:
+            continue
+
+        paths: List[str] = []
         for it in sub_items:
-            n = it.get("name")
-            if n:
-                paths.append(f"{sub_prefix}/{n}")
+            name = it.get("name")
+            if name:
+                paths.append(f"{sub_prefix}/{name}")
+
         if paths:
-            sb.storage.from_(bucket).remove(paths)
+            try:
+                sb.storage.from_(bucket).remove(paths)
+            except Exception:
+                pass
+
+
+def get_latest_snapshot_run_id(
+    sb,
+    bucket: str,
+    runs_prefix: str = "runs",
+) -> Optional[str]:
+    """
+    Retourne le run_id le plus récent dans bucket/runs/<run_id>/...
+    (utilisé par runner pour lire le dernier snapshot)
+    """
+    bucket = (bucket or "").strip()
+    runs_prefix = (runs_prefix or "runs").strip().strip("/")
+    if not bucket:
+        return None
+
+    try:
+        items = sb.storage.from_(bucket).list(runs_prefix) or []
+    except Exception:
+        return None
+
+    run_ids = sorted(
+        [it.get("name") for it in items if it and it.get("name")],
+        reverse=True,
+    )
+    return run_ids[0] if run_ids else None
 
