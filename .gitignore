@@ -9,3 +9,4 @@ __pycache__/
 .env.local.save
 .env
 .DS_Store
+*.bak
