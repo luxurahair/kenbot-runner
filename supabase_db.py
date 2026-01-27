@@ -17,108 +17,25 @@ def utc_now_iso() -> str:
 
 
 # =========================
-# Storage helpers
-# =========================
-def upload_json_to_storage(sb: Client, bucket: str, path: str, obj: Any, upsert: bool = True) -> None:
-    data = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
-    opts = {"content-type": "application/json"}
-    if upsert:
-        opts["upsert"] = "true"
-    sb.storage.from_(bucket).upload(path, data, file_options=opts)
-
-
-def read_json_from_storage(sb: Client, bucket: str, path: str) -> dict:
-    try:
-        res = sb.storage.from_(bucket).download(path)
-    except Exception:
-        return {}
-    if not res:
-        return {}
-    try:
-        return json.loads(res.decode("utf-8"))
-    except Exception:
-        return {}
-
-
-def upload_bytes_to_storage(
-    sb: Client,
-    bucket: str,
-    path: str,
-    data: bytes,
-    content_type: str = "application/octet-stream",
-    upsert: bool = True,
-) -> None:
-    opts = {"content-type": content_type}
-    if upsert:
-        opts["upsert"] = "true"
-    sb.storage.from_(bucket).upload(path, data, file_options=opts)
-
-
-def list_storage(sb: Client, bucket: str, folder: str) -> List[Dict[str, Any]]:
-    # Supabase list: folder sans leading slash
-    return sb.storage.from_(bucket).list(folder) or []
-
-
-def get_latest_snapshot_run_id(sb: Client, bucket: str, runs_folder: str = "runs") -> Optional[str]:
-    items = list_storage(sb, bucket, runs_folder)
-    names = sorted([it.get("name") for it in items if it.get("name")], reverse=True)
-    return names[0] if names else None
-
-
-def cleanup_storage_runs(sb: Client, bucket: str, folder: str, keep: int = 2) -> int:
-    """
-    folder ex: 'raw_pages' ou 'runs'
-    Garde les keep plus récents, supprime le reste.
-    Retourne le nombre de runs supprimés.
-    """
-    if keep < 0:
-        keep = 0
-
-    items = list_storage(sb, bucket, folder)
-    names = sorted([it.get("name") for it in items if it.get("name")], reverse=True)
-    to_delete = names[keep:]
-
-    deleted = 0
-    for run_id in to_delete:
-        if not run_id:
-            continue
-        files = list_storage(sb, bucket, f"{folder}/{run_id}")
-        paths = []
-        for f in files:
-            fn = f.get("name")
-            if fn:
-                paths.append(f"{folder}/{run_id}/{fn}")
-        if paths:
-            sb.storage.from_(bucket).remove(paths)
-        deleted += 1
-
-    return deleted
-
-
-# =========================
 # Client
 # =========================
-from supabase import create_client, Client
-
 def get_client(url: str | None = None, key: str | None = None) -> Client:
-    # fallback env si non fourni
     url = (url or os.getenv("SUPABASE_URL") or "").strip()
     key = (key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
 
     if not url or not key:
         raise RuntimeError("Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY")
 
-    base = url.rstrip("/")  # base sans slash
+    base = url.rstrip("/")
     sb = create_client(base, key)
 
-    # Force endpoint storage avec slash (évite warnings)
+    # Force le endpoint Storage avec slash (évite le warning)
     try:
         sb.storage_url = f"{base}/storage/v1/"
     except Exception:
         pass
 
     return sb
-
 
 # =========================
 # Core tables: inventory / posts / events
