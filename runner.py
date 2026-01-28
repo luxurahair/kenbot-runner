@@ -439,10 +439,105 @@ def ensure_sticker_cached(sb, vin: str, run_id: str) -> Dict[str, Any]:
 
 def build_meta_vehicle_feed_csv(current: dict) -> bytes:
     """
-    Génère un feed Meta simple:
-    id,title,description,availability,condition,price,link,image_link,brand,year
+    Feed Meta Auto (Vehicles)
+    Colonnes:
+    id,title,description,availability,condition,price,link,image_link,brand,year,model,mileage,body_style
+
+    Logique:
+    - brand/model extraits du title: "2018 Dodge Challenger R/T Scat Pack" -> brand="Dodge", model="Challenger R/T Scat Pack"
+    - condition = used (fixe)
+    - title = "YEAR BRAND MODEL" (court)
+    - description = infos utiles sans recopier le title
     """
-    fieldnames = ["id","title","description","availability","condition","price","link","image_link","brand","year"]
+    def _extract_year(title: str) -> str:
+        m = re.search(r"\b(19\d{2}|20\d{2})\b", title or "")
+        return m.group(1) if m else ""
+
+    def _extract_brand_model(title: str) -> tuple[str, str]:
+        """
+        Extrait brand et model à partir du title.
+        Attendu: "2018 Dodge Challenger R/T Scat Pack ..."
+        -> brand=Dodge, model="Challenger R/T Scat Pack ..."
+        """
+        t = (title or "").strip()
+        if not t:
+            return ("", "")
+
+        parts = t.split()
+        # Trouver l'année si elle existe
+        year_idx = None
+        for i, p in enumerate(parts):
+            if re.fullmatch(r"(19|20)\d{2}", p):
+                year_idx = i
+                break
+
+        if year_idx is not None and year_idx + 1 < len(parts):
+            brand = parts[year_idx + 1]
+            model = " ".join(parts[year_idx + 2:]).strip() if year_idx + 2 < len(parts) else ""
+        else:
+            # fallback: premier mot = brand, reste = model
+            brand = parts[0] if parts else ""
+            model = " ".join(parts[1:]).strip() if len(parts) > 1 else ""
+
+        # Nettoyage
+        brand = (brand or "").strip()
+        model = re.sub(r"\s+", " ", (model or "")).strip()
+
+        # Meta n'aime pas les romans en model
+        if len(model) > 80:
+            model = model[:80].rsplit(" ", 1)[0]
+
+        return (brand, model)
+
+    def _extract_mileage(v: dict) -> str:
+        """
+        Essaie km_int / mileage_int / mileage / km / odometer.
+        Retourne un string (ex: "103245") ou "".
+        """
+        for k in ("km_int", "mileage_int", "mileage", "km", "odometer"):
+            val = v.get(k)
+            if isinstance(val, int):
+                return str(val)
+            if isinstance(val, str):
+                digits = "".join(ch for ch in val if ch.isdigit())
+                if digits:
+                    return digits
+        return ""
+
+    def _guess_body_style(brand: str, model: str, title: str) -> str:
+        """
+        Heuristique simple mais utile.
+        Tu peux raffiner plus tard, mais ça donne déjà un body_style mappable.
+        """
+        s = f"{brand} {model} {title}".lower()
+
+        # Minivan
+        if any(x in s for x in ["caravan", "grand caravan", "pacifica", "odyssey", "sienna", "town & country"]):
+            return "Minivan"
+
+        # Truck
+        if any(x in s for x in ["ram 1", "ram 2", "ram 3", "1500", "2500", "3500", "pickup", "f-150", "silverado", "sierra"]):
+            return "Truck"
+
+        # SUV
+        if any(x in s for x in ["wrangler", "cherokee", "grand cherokee", "compass", "renegade", "durango", "journey", "suv"]):
+            return "SUV"
+
+        # Sedan / Coupe (basique)
+        if any(x in s for x in ["charger", "300", "accord", "camry", "civic", "corolla", "malibu"]):
+            return "Sedan"
+
+        if any(x in s for x in ["challenger", "mustang", "camaro", "coupe"]):
+            return "Coupe"
+
+        return ""
+
+    fieldnames = [
+        "id", "title", "description", "availability", "condition",
+        "price", "link", "image_link", "brand", "year",
+        "model", "mileage", "body_style",
+    ]
+
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=fieldnames)
     w.writeheader()
@@ -450,7 +545,7 @@ def build_meta_vehicle_feed_csv(current: dict) -> bytes:
     for slug, v in (current or {}).items():
         stock = (v.get("stock") or "").strip().upper()
         url = (v.get("url") or "").strip()
-        title = (v.get("title") or "").strip()
+        raw_title = (v.get("title") or "").strip()
         price_int = v.get("price_int")
 
         # fallback si price_int absent
@@ -462,25 +557,43 @@ def build_meta_vehicle_feed_csv(current: dict) -> bytes:
         photos = v.get("photos") or []
         image_link = (photos[0] or "").strip() if photos else ""
 
-        if not stock or not url or not title or not isinstance(price_int, int):
+        # Fallback image optionnel (si tu veux éviter de perdre des véhicules dans le feed)
+        # Mets KENBOT_NO_PHOTO_URL dans Render si tu veux.
+        if not image_link:
+            image_link = (os.getenv("KENBOT_NO_PHOTO_URL", "") or "").strip()
+
+        if not stock or not url or not raw_title or not isinstance(price_int, int):
             continue
         if not image_link:
-            # Meta préfère une image publique; si tu veux, on met no_photo ici plus tard
+            # Si aucune image et aucun fallback -> on skip (Meta aime pas les items sans image)
             continue
 
-        year = ""
-        m = re.search(r"\b(19\d{2}|20\d{2})\b", title)
-        if m:
-            year = m.group(1)
+        year = _extract_year(raw_title)
+        brand, model = _extract_brand_model(raw_title)
 
-        brand = (v.get("make") or "").strip()
-        if not brand:
-            brand = title.split(" ", 1)[0].strip()
+        # Title clean: "YEAR BRAND MODEL"
+        clean_title = " ".join(x for x in [year, brand, model] if x).strip()
+        if not clean_title:
+            clean_title = raw_title
+        clean_title = clean_title[:150]
+
+        mileage = _extract_mileage(v)
+        body_style = _guess_body_style(brand, model, raw_title)
+
+        # Description: ne répète pas le title
+        desc_parts = [f"Stock {stock}"]
+        if year:
+            desc_parts.append(f"Année {year}")
+        if mileage:
+            desc_parts.append(f"{mileage} km")
+        if body_style:
+            desc_parts.append(body_style)
+        description = " • ".join(desc_parts)[:5000]
 
         w.writerow({
             "id": stock,
-            "title": title,
-            "description": f"{title} | Stock {stock}",
+            "title": clean_title,
+            "description": description,
             "availability": "in stock",
             "condition": "used",
             "price": f"{price_int} CAD",
@@ -488,6 +601,9 @@ def build_meta_vehicle_feed_csv(current: dict) -> bytes:
             "image_link": image_link,
             "brand": brand,
             "year": year,
+            "model": model,
+            "mileage": mileage,
+            "body_style": body_style,
         })
 
     return buf.getvalue().encode("utf-8")
