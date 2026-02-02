@@ -43,7 +43,25 @@ def get_client(url: str | None = None, key: str | None = None) -> Client:
 def upsert_inventory(sb: Client, rows: List[Dict[str, Any]]) -> None:
     if not rows:
         return
-    sb.table("inventory").upsert(rows, on_conflict="slug").execute()
+
+    cleaned: List[Dict[str, Any]] = []
+    for r in rows:
+        st = (r.get("stock") or "").strip().upper()
+        if not st:
+            continue  # pas de stock => on skip (sinon on casse l'unicité)
+        r["stock"] = st
+
+        # slug utile mais pas clé; on le garde propre
+        if r.get("slug"):
+            r["slug"] = str(r["slug"]).strip()
+
+        cleaned.append(r)
+
+    if not cleaned:
+        return
+
+    # ✅ maintenant que DB a UNIQUE(stock), on upsert sur stock
+    sb.table("inventory").upsert(cleaned, on_conflict="stock").execute()
 
 
 def get_inventory_map(sb: Client) -> Dict[str, Dict[str, Any]]:
@@ -53,6 +71,21 @@ def get_inventory_map(sb: Client) -> Dict[str, Dict[str, Any]]:
 
 
 def upsert_post(sb: Client, row: Dict[str, Any]) -> None:
+    if not row:
+        return
+
+    st = (row.get("stock") or "").strip().upper()
+    if st:
+        row["stock"] = st
+        # ✅ tu as maintenant un UNIQUE INDEX sur posts(stock) (WHERE stock IS NOT NULL)
+        sb.table("posts").upsert(row, on_conflict="stock").execute()
+        return
+
+    # fallback legacy: PK slug (ta table a posts_pkey sur slug)
+    slug = (row.get("slug") or "").strip()
+    if not slug:
+        return
+    row["slug"] = slug
     sb.table("posts").upsert(row, on_conflict="slug").execute()
 
 
