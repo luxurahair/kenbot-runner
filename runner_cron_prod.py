@@ -2,14 +2,11 @@
 # -*- coding: utf-8 -*-
 
 """
-runner_cron_prod.py (v2 PROD)
-- Compatible avec tes env Render existantes (NO_PHOTO_BUCKET/PATH + ALLOW_NO_PHOTO)
-- Scrape Kennebec 3 pages -> RAW storage + table raw_pages
-- Cache stickers PDF
-- StickerToAd FACEBOOK only (NEW + PRICE_CHANGED) + fallback text-engine
-- SOLD fiable (ACTIVE -> MISSING -> SOLD) + garde-fou anti-scrape cassé
-- Meta feed CSV + report meta_vs_site.csv (FULL only)
-- NO_PHOTO daily refresh (1x/day FULL): remplace no_photo si Kennebec a maintenant des photos
+runner_cron_prod.py (v2 PROD) - FIXED
+FIXES:
+- Slug stable par STOCK: réutilise le slug DB quand stock déjà connu (évite duplicats inventory ACTIVE/SOLD)
+- Upserts de statut incluent toujours stock quand possible (RECOVERED/MISSING/SOLD)
+- daily_audit_and_fix lit inventory ACTIVE "meilleur row par stock" (pas de doublons contradictoires)
 """
 
 import os
@@ -19,7 +16,7 @@ import csv
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
@@ -108,10 +105,10 @@ OUTPUT_RUNS_KEEP = int(os.getenv("KENBOT_OUTPUT_RUNS_KEEP", "5").strip() or "5")
 MIN_INVENTORY_ABS = int(os.getenv("KENBOT_MIN_INVENTORY_ABS", "30").strip() or "30")
 MIN_INVENTORY_RATIO = float(os.getenv("KENBOT_MIN_INVENTORY_RATIO", "0.70").strip() or "0.70")
 
-# StickerToAd Facebook only (ta variable Render)
+# StickerToAd Facebook only
 USE_STICKER_AD = os.getenv("KENBOT_FB_USE_STICKER_AD", "1").strip() == "1"
 
-# No photo legacy (tes variables Render)
+# No photo legacy
 ALLOW_NO_PHOTO = os.getenv("KENBOT_ALLOW_NO_PHOTO", "1").strip() == "1"
 NO_PHOTO_URL = (os.getenv("KENBOT_NO_PHOTO_URL") or "").strip()
 
@@ -122,7 +119,7 @@ if not NO_PHOTO_URL:
     if nb and np and sb_url:
         NO_PHOTO_URL = f"{sb_url}/storage/v1/object/public/{nb}/{np}"
 
-# Reports (compat avec ton setup)
+# Reports
 BUILD_META_FEEDS = os.getenv("KENBOT_BUILD_META_FEEDS", "0").strip() == "1"
 COMPARE_META_VS_SITE = os.getenv("KENBOT_COMPARE_META_VS_SITE", "0").strip() == "1"
 COMPARE_META_LIMIT = int(os.getenv("KENBOT_COMPARE_META_LIMIT", "30").strip() or "30")
@@ -131,7 +128,7 @@ COMPARE_META_LIMIT = int(os.getenv("KENBOT_COMPARE_META_LIMIT", "30").strip() or
 REFRESH_NO_PHOTO_DAILY = os.getenv("KENBOT_REFRESH_NO_PHOTO_DAILY", "1").strip() == "1"
 REFRESH_NO_PHOTO_LIMIT = int(os.getenv("KENBOT_REFRESH_NO_PHOTO_LIMIT", "25").strip() or "25")
 
-# Daily audit+fix (FULL only) - 1x/day guard
+# Daily audit+fix (FULL only)
 DAILY_FIX = os.getenv("KENBOT_DAILY_FIX", "1").strip() == "1"
 DAILY_FIX_LIMIT = int(os.getenv("KENBOT_DAILY_FIX_LIMIT", "120").strip() or "120")
 DAILY_FIX_SLEEP = int(os.getenv("KENBOT_DAILY_FIX_SLEEP", "12").strip() or "12")
@@ -319,38 +316,44 @@ def _extract_options_from_sticker_bytes(pdf_bytes: bytes) -> List[Dict[str, Any]
             tmp.unlink(missing_ok=True)
         except Exception:
             pass
+
 def _today_key_utc() -> str:
     ts = time.gmtime()
     return f"{ts.tm_year:04d}{ts.tm_mon:02d}{ts.tm_mday:02d}"
 
 def _try_daily_guard(sb, prefix: str) -> bool:
-    """
-    Empêche d'exécuter une tâche plus d'une fois par jour
-    (utile quand le cron FULL roule 2x/jour).
-    """
     path = f"locks/{prefix}_{_today_key_utc()}.lock"
-
     try:
         b = sb.storage.from_(OUTPUTS_BUCKET).download(path)
         if b:
-            return False  # déjà fait aujourd'hui
+            return False
     except Exception:
         pass
 
-    payload = json.dumps({
-        "ts": int(time.time()),
-        "prefix": prefix,
-    }).encode("utf-8")
-
+    payload = json.dumps({"ts": int(time.time()), "prefix": prefix}).encode("utf-8")
     sb.storage.from_(OUTPUTS_BUCKET).upload(
         path,
         payload,
-        {
-            "content-type": "application/json",
-            "x-upsert": "true",
-        },
+        {"content-type": "application/json", "x-upsert": "true"},
     )
     return True
+
+def _best_row_per_stock(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    rank = {"ACTIVE": 3, "MISSING": 2, "SOLD": 1}
+    tmp: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows or []:
+        st = (r.get("stock") or "").strip().upper()
+        if not st:
+            continue
+        tmp.setdefault(st, []).append(r)
+
+    out: Dict[str, Dict[str, Any]] = {}
+    def key(r):
+        st = (r.get("status") or "").upper()
+        return (rank.get(st, 0), (r.get("updated_at") or ""), (r.get("last_seen") or ""))
+    for st, lst in tmp.items():
+        out[st] = sorted(lst, key=key, reverse=True)[0]
+    return out
 
 def _build_ad_text(sb, run_id: str, slug: str, v: Dict[str, Any], event: str) -> str:
     vin = (v.get("vin") or "").strip().upper()
@@ -391,17 +394,6 @@ def _build_ad_text(sb, run_id: str, slug: str, v: Dict[str, Any], event: str) ->
     return generate_facebook_text(TEXT_ENGINE_URL, slug, event, v)
 
 def daily_audit_and_fix(sb, run_id: str) -> dict:
-    """
-    DAILY (FULL only, 1x/day via _try_daily_guard):
-    - source de vérité = inventory ACTIVE (site)
-    - restore faux sold si:
-        - posts.status == SOLD OU
-        - base_text commence par 🚨 VENDU 🚨
-      et que le stock est encore sur le site
-    - fix texte:
-        - StickerToAd si pdf_ok/<VIN>.pdf existe
-        - sinon fallback text-engine si DAILY_FIX_FALLBACK=1
-    """
     if RUN_MODE != "FULL":
         return {"skipped": "not_full"}
     if not DAILY_FIX:
@@ -409,24 +401,18 @@ def daily_audit_and_fix(sb, run_id: str) -> dict:
     if not _try_daily_guard(sb, "daily_fix"):
         return {"skipped": "already_done_today"}
 
-    # --- Source of truth = site (inventory ACTIVE) ---
     inv_rows = (
         sb.table("inventory")
-        .select("stock,slug,title,url,vin,price_int,km_int,status,updated_at")
+        .select("stock,slug,title,url,vin,price_int,km_int,status,updated_at,last_seen")
         .eq("status", "ACTIVE")
         .limit(5000)
         .execute()
         .data
         or []
     )
-    site_by_stock = {
-        (r.get("stock") or "").strip().upper(): r
-        for r in inv_rows
-        if (r.get("stock") or "").strip()
-    }
+    site_by_stock = _best_row_per_stock(inv_rows)
     site_stocks = sorted(site_by_stock.keys())
 
-    # --- Posts FB (map by stock + dedup) ---
     posts_rows = (
         sb.table("posts")
         .select("post_id,stock,slug,status,base_text,last_updated_at,sold_at")
@@ -437,17 +423,13 @@ def daily_audit_and_fix(sb, run_id: str) -> dict:
         or []
     )
 
-    # Dedup: garder le plus récent par stock
     posts_by_stock = {}
     for p in posts_rows:
         st = (p.get("stock") or "").strip().upper()
         if not st:
             continue
         cur = posts_by_stock.get(st)
-        if not cur:
-            posts_by_stock[st] = p
-            continue
-        if (p.get("last_updated_at") or "") > (cur.get("last_updated_at") or ""):
+        if not cur or (p.get("last_updated_at") or "") > (cur.get("last_updated_at") or ""):
             posts_by_stock[st] = p
 
     restored = 0
@@ -455,7 +437,6 @@ def daily_audit_and_fix(sb, run_id: str) -> dict:
     checked = 0
     missing_post = 0
 
-    # IMPORTANT: on boucle sur LES STOCKS DU SITE (pas sur posts[:N])
     for stock in site_stocks[:DAILY_FIX_LIMIT]:
         site = site_by_stock.get(stock) or {}
         p = posts_by_stock.get(stock)
@@ -467,15 +448,11 @@ def daily_audit_and_fix(sb, run_id: str) -> dict:
         post_id = p["post_id"]
         fb_status = (p.get("status") or "").upper()
         base_text = (p.get("base_text") or "").strip()
-
-        # Détection "vendu" basée sur le texte (cas Honda)
         has_sold_banner = base_text.lstrip().startswith("🚨 VENDU 🚨")
 
-        # --- A) RESTORE faux sold (status SOLD OU bandeau vendu) alors que stock présent sur site ---
         if fb_status == "SOLD" or has_sold_banner:
             restore_text = _strip_sold_banner(base_text) if base_text else ""
             if not restore_text:
-                # fallback: regen un texte propre
                 payload = {
                     "slug": (site.get("slug") or p.get("slug") or "").strip(),
                     "stock": stock,
@@ -501,7 +478,6 @@ def daily_audit_and_fix(sb, run_id: str) -> dict:
                     log_event(sb, stock, "DAILY_RESTORE_FAIL", {"post_id": post_id, "err": str(e), "run_id": run_id})
             restored += 1
 
-        # --- B) FIX TEXTE (StickerToAd si pdf_ok, sinon fallback) ---
         vin = (site.get("vin") or "").strip().upper()
         has_pdf_ok = False
         if vin and len(vin) == 17:
@@ -712,10 +688,11 @@ def main() -> None:
         cleanup_storage_runs(sb, SNAP_BUCKET, "runs", keep=SNAP_KEEP)
         cleanup_storage_runs(sb, OUTPUTS_BUCKET, "runs", keep=OUTPUT_RUNS_KEEP)
 
-        inv_db = get_inventory_map(sb)
+        inv_db = get_inventory_map(sb)  # map par slug, mais values contiennent stock
         posts_db = get_posts_map(sb)
 
-        # Scrape 3 pages RAW
+        inv_by_stock = _best_row_per_stock(list(inv_db.values()))
+
         listing_url = f"{BASE_URL}{INVENTORY_PATH}"
         page_urls = [
             listing_url,
@@ -750,7 +727,11 @@ def main() -> None:
                 title = (v.get("title") or "").strip()
                 if not stock or not title:
                     continue
-                slug = slugify(title, stock)
+
+                existing = inv_by_stock.get(stock) or {}
+                stable_slug = (existing.get("slug") or "").strip()
+                slug = stable_slug if stable_slug else slugify(title, stock)
+
                 v["slug"] = slug
                 current[slug] = v
             except Exception:
@@ -760,7 +741,6 @@ def main() -> None:
         raw_meta["inventory_count"] = inv_count
         upload_json_to_storage(sb, RAW_BUCKET, f"raw_pages/{run_id}/meta.json", raw_meta, upsert=True)
 
-        # Anti-scrape cassé
         inv_db_active = {s: r for s, r in inv_db.items() if (r.get("status") or "").upper() in ("ACTIVE", "MISSING")}
         db_active_count = len(inv_db_active) or 1
 
@@ -782,7 +762,6 @@ def main() -> None:
         if scrape_ok:
             refresh_no_photo_daily(sb, run_id, current)
 
-        # Cache stickers (FULL only)
         if RUN_MODE == "FULL" and CACHE_STICKERS:
             vins = []
             for v in current.values():
@@ -805,7 +784,7 @@ def main() -> None:
                     skip += 1
             log_event(sb, "STICKER", "STICKER_SUMMARY", {"ok": ok, "bad": bad, "skip": skip, "total": len(vins), "run_id": run_id})
 
-        # Upsert inventory ACTIVE
+        # Upsert inventory ACTIVE (avec stock)
         rows = []
         for slug, v in current.items():
             rows.append({
@@ -829,16 +808,20 @@ def main() -> None:
         disappeared_slugs = sorted(db_slugs - current_slugs)
         new_slugs = sorted(current_slugs - db_slugs)
         common_slugs = sorted(current_slugs & db_slugs)
-       
+
         if scrape_ok:
             daily_stats = daily_audit_and_fix(sb, run_id)
             log_event(sb, "DAILY", "DAILY_FIX", {"run_id": run_id, **daily_stats})
-      
-        # Recovered MISSING -> ACTIVE
+
+        # Recovered MISSING -> ACTIVE (inclut stock si possible)
         for slug in common_slugs:
             old = inv_db.get(slug) or {}
             if (old.get("status") or "").upper() == "MISSING":
-                upsert_inventory(sb, [{"slug": slug, "status": "ACTIVE", "updated_at": now, "last_seen": now}])
+                st = (old.get("stock") or "").strip().upper()
+                payload = {"slug": slug, "status": "ACTIVE", "updated_at": now, "last_seen": now}
+                if st:
+                    payload["stock"] = st
+                upsert_inventory(sb, [payload])
                 log_event(sb, slug, "RECOVERED_ACTIVE", {"run_id": run_id})
 
         # SOLD flow fiable
@@ -846,11 +829,16 @@ def main() -> None:
             for slug in disappeared_slugs:
                 old_inv = inv_db.get(slug) or {}
                 old_status = (old_inv.get("status") or "").upper()
+                st = (old_inv.get("stock") or "").strip().upper()
+
                 post = posts_db.get(slug) or {}
                 post_id = post.get("post_id")
 
                 if old_status == "ACTIVE":
-                    upsert_inventory(sb, [{"slug": slug, "status": "MISSING", "updated_at": now}])
+                    payload = {"slug": slug, "status": "MISSING", "updated_at": now}
+                    if st:
+                        payload["stock"] = st
+                    upsert_inventory(sb, [payload])
                     log_event(sb, slug, "MISSING_1", {"post_id": post_id, "run_id": run_id})
                     continue
 
@@ -874,13 +862,16 @@ def main() -> None:
                                     "sold_at": now,
                                     "last_updated_at": now,
                                     "base_text": base_text,
-                                    "stock": post.get("stock"),
+                                    "stock": post.get("stock") or st,
                                 })
                                 log_event(sb, slug, "SOLD_CONFIRMED", {"post_id": post_id, "run_id": run_id})
                             except Exception as e:
                                 log_event(sb, slug, "FB_SOLD_FAIL", {"post_id": post_id, "err": str(e), "run_id": run_id})
 
-                    upsert_inventory(sb, [{"slug": slug, "status": "SOLD", "updated_at": now}])
+                    payload = {"slug": slug, "status": "SOLD", "updated_at": now}
+                    if st:
+                        payload["stock"] = st
+                    upsert_inventory(sb, [payload])
         else:
             if disappeared_slugs:
                 log_event(sb, "SCRAPE", "SKIP_SOLD_DUE_TO_BAD_SCRAPE", {"count": len(disappeared_slugs), "run_id": run_id})
@@ -936,7 +927,6 @@ def main() -> None:
             try:
                 msg = _build_ad_text(sb, run_id, slug, v, event="NEW")
 
-                # FB: on ne poste pas sans vraies photos
                 photo_paths = _download_photos(stock, photos, limit=MAX_PHOTOS)
                 if not photo_paths:
                     log_event(sb, slug, "NEW_SKIP_NO_PHOTOS", {"run_id": run_id})
@@ -993,4 +983,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
