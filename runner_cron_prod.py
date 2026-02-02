@@ -391,6 +391,17 @@ def _build_ad_text(sb, run_id: str, slug: str, v: Dict[str, Any], event: str) ->
     return generate_facebook_text(TEXT_ENGINE_URL, slug, event, v)
 
 def daily_audit_and_fix(sb, run_id: str) -> dict:
+    """
+    DAILY (FULL only, 1x/day via _try_daily_guard):
+    - source de vérité = inventory ACTIVE (site)
+    - restore faux sold si:
+        - posts.status == SOLD OU
+        - base_text commence par 🚨 VENDU 🚨
+      et que le stock est encore sur le site
+    - fix texte:
+        - StickerToAd si pdf_ok/<VIN>.pdf existe
+        - sinon fallback text-engine si DAILY_FIX_FALLBACK=1
+    """
     if RUN_MODE != "FULL":
         return {"skipped": "not_full"}
     if not DAILY_FIX:
@@ -398,88 +409,150 @@ def daily_audit_and_fix(sb, run_id: str) -> dict:
     if not _try_daily_guard(sb, "daily_fix"):
         return {"skipped": "already_done_today"}
 
-    # Source of truth = inventory ACTIVE (site)
-    inv_rows = sb.table("inventory").select("stock,slug,title,url,vin,price_int,km_int,status").eq("status","ACTIVE").execute().data or []
-    site_by_stock = {(r.get("stock") or "").strip().upper(): r for r in inv_rows if (r.get("stock") or "").strip()}
+    # --- Source of truth = site (inventory ACTIVE) ---
+    inv_rows = (
+        sb.table("inventory")
+        .select("stock,slug,title,url,vin,price_int,km_int,status,updated_at")
+        .eq("status", "ACTIVE")
+        .limit(5000)
+        .execute()
+        .data
+        or []
+    )
+    site_by_stock = {
+        (r.get("stock") or "").strip().upper(): r
+        for r in inv_rows
+        if (r.get("stock") or "").strip()
+    }
+    site_stocks = sorted(site_by_stock.keys())
 
-    # Posts FB
-    posts = sb.table("posts").select("post_id,stock,slug,status,base_text").neq("post_id", None).execute().data or []
+    # --- Posts FB (map by stock + dedup) ---
+    posts_rows = (
+        sb.table("posts")
+        .select("post_id,stock,slug,status,base_text,last_updated_at,sold_at")
+        .neq("post_id", None)
+        .limit(5000)
+        .execute()
+        .data
+        or []
+    )
+
+    # Dedup: garder le plus récent par stock
+    posts_by_stock = {}
+    for p in posts_rows:
+        st = (p.get("stock") or "").strip().upper()
+        if not st:
+            continue
+        cur = posts_by_stock.get(st)
+        if not cur:
+            posts_by_stock[st] = p
+            continue
+        if (p.get("last_updated_at") or "") > (cur.get("last_updated_at") or ""):
+            posts_by_stock[st] = p
 
     restored = 0
     text_fixed = 0
     checked = 0
+    missing_post = 0
 
-    for p in posts[:DAILY_FIX_LIMIT]:
-        post_id = p.get("post_id")
-        stock = (p.get("stock") or "").strip().upper()
-        slug = (p.get("slug") or "").strip()
-        fb_status = (p.get("status") or "").upper()
+    # IMPORTANT: on boucle sur LES STOCKS DU SITE (pas sur posts[:N])
+    for stock in site_stocks[:DAILY_FIX_LIMIT]:
+        site = site_by_stock.get(stock) or {}
+        p = posts_by_stock.get(stock)
 
-        if not post_id or not stock:
+        if not p or not p.get("post_id"):
+            missing_post += 1
             continue
 
-        site = site_by_stock.get(stock)
-        site_present = bool(site)
+        post_id = p["post_id"]
+        fb_status = (p.get("status") or "").upper()
+        base_text = (p.get("base_text") or "").strip()
 
-        # A) RESTORE faux SOLD si encore sur site
-        if fb_status == "SOLD" and site_present:
-            base_text = (p.get("base_text") or "").strip()
-            msg = _strip_sold_banner(base_text) if base_text else "(texte manquant)"
+        # Détection "vendu" basée sur le texte (cas Honda)
+        has_sold_banner = base_text.lstrip().startswith("🚨 VENDU 🚨")
+
+        # --- A) RESTORE faux sold (status SOLD OU bandeau vendu) alors que stock présent sur site ---
+        if fb_status == "SOLD" or has_sold_banner:
+            restore_text = _strip_sold_banner(base_text) if base_text else ""
+            if not restore_text:
+                # fallback: regen un texte propre
+                payload = {
+                    "slug": (site.get("slug") or p.get("slug") or "").strip(),
+                    "stock": stock,
+                    "title": (site.get("title") or "").strip(),
+                    "url": (site.get("url") or "").strip(),
+                    "vin": (site.get("vin") or "").strip(),
+                    "price_int": site.get("price_int"),
+                    "km_int": site.get("km_int"),
+                }
+                restore_text = _build_ad_text(sb, run_id, payload["slug"] or stock, payload, event="PRICE_CHANGED")
+
             if not DRY_RUN:
-                update_post_text(post_id, FB_TOKEN, msg)
-                sb.table("posts").update({
-                    "status":"ACTIVE",
-                    "sold_at": None,
-                    "last_updated_at": utc_now_iso(),
-                    "base_text": msg,
-                }).eq("post_id", post_id).execute()
-                time.sleep(max(2, DAILY_FIX_SLEEP))
+                try:
+                    update_post_text(post_id, FB_TOKEN, restore_text)
+                    sb.table("posts").update({
+                        "status": "ACTIVE",
+                        "sold_at": None,
+                        "last_updated_at": utc_now_iso(),
+                        "base_text": restore_text,
+                    }).eq("post_id", post_id).execute()
+                    time.sleep(max(2, DAILY_FIX_SLEEP))
+                except Exception as e:
+                    log_event(sb, stock, "DAILY_RESTORE_FAIL", {"post_id": post_id, "err": str(e), "run_id": run_id})
             restored += 1
 
-        # B) FIX TEXTE (pdf_ok -> sticker, sinon fallback si activé)
-        if site_present and fb_status != "SOLD":
-            vin = (site.get("vin") or "").strip().upper()
-            has_pdf_ok = False
-            if vin and len(vin) == 17:
-                try:
-                    pdf = sb.storage.from_(STICKERS_BUCKET).download(f"pdf_ok/{vin}.pdf")
-                    has_pdf_ok = bool(pdf) and pdf[:4] == b"%PDF"
-                except Exception:
-                    has_pdf_ok = False
+        # --- B) FIX TEXTE (StickerToAd si pdf_ok, sinon fallback) ---
+        vin = (site.get("vin") or "").strip().upper()
+        has_pdf_ok = False
+        if vin and len(vin) == 17:
+            try:
+                pdf = sb.storage.from_(STICKERS_BUCKET).download(f"pdf_ok/{vin}.pdf")
+                has_pdf_ok = bool(pdf) and pdf[:4] == b"%PDF"
+            except Exception:
+                has_pdf_ok = False
 
-            vehicle_payload = {
-                "slug": site.get("slug") or slug,
-                "stock": stock,
-                "title": site.get("title") or "",
-                "url": site.get("url") or "",
-                "vin": vin,
-                "price_int": site.get("price_int"),
-                "km_int": site.get("km_int"),
-            }
+        payload = {
+            "slug": (site.get("slug") or p.get("slug") or "").strip(),
+            "stock": stock,
+            "title": (site.get("title") or "").strip(),
+            "url": (site.get("url") or "").strip(),
+            "vin": vin,
+            "price_int": site.get("price_int"),
+            "km_int": site.get("km_int"),
+        }
 
-            if has_pdf_ok:
-                new_text = _build_ad_text(sb, run_id, vehicle_payload["slug"] or stock, vehicle_payload, event="PRICE_CHANGED")
-            elif DAILY_FIX_FALLBACK:
-                new_text = generate_facebook_text(TEXT_ENGINE_URL, vehicle_payload["slug"] or stock, "PRICE_CHANGED", vehicle_payload)
-            else:
-                new_text = None
+        if has_pdf_ok:
+            new_text = _build_ad_text(sb, run_id, payload["slug"] or stock, payload, event="PRICE_CHANGED")
+        elif DAILY_FIX_FALLBACK:
+            new_text = generate_facebook_text(TEXT_ENGINE_URL, payload["slug"] or stock, "PRICE_CHANGED", payload)
+        else:
+            new_text = None
 
-            if new_text:
-                old_text = (p.get("base_text") or "").strip()
-                if old_text.strip() != new_text.strip():
-                    if not DRY_RUN:
+        if new_text:
+            cur_text = (p.get("base_text") or "").strip()
+            if cur_text.strip() != new_text.strip():
+                if not DRY_RUN:
+                    try:
                         update_post_text(post_id, FB_TOKEN, new_text)
                         sb.table("posts").update({
                             "base_text": new_text,
                             "last_updated_at": utc_now_iso(),
-                            "status":"ACTIVE",
+                            "status": "ACTIVE",
                         }).eq("post_id", post_id).execute()
                         time.sleep(max(2, DAILY_FIX_SLEEP))
-                    text_fixed += 1
+                    except Exception as e:
+                        log_event(sb, stock, "DAILY_TEXT_FIX_FAIL", {"post_id": post_id, "err": str(e), "run_id": run_id})
+                text_fixed += 1
 
         checked += 1
 
-    return {"checked": checked, "restored": restored, "text_fixed": text_fixed}
+    return {
+        "checked": checked,
+        "restored": restored,
+        "text_fixed": text_fixed,
+        "missing_post": missing_post,
+        "site_count": len(site_stocks),
+    }
 
 def build_meta_vehicle_feed_csv(current: Dict[str, Any]) -> bytes:
     fieldnames = ["id","title","description","availability","condition","price","link","image_link","brand","year"]
