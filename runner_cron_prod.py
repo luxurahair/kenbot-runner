@@ -131,6 +131,12 @@ COMPARE_META_LIMIT = int(os.getenv("KENBOT_COMPARE_META_LIMIT", "30").strip() or
 REFRESH_NO_PHOTO_DAILY = os.getenv("KENBOT_REFRESH_NO_PHOTO_DAILY", "1").strip() == "1"
 REFRESH_NO_PHOTO_LIMIT = int(os.getenv("KENBOT_REFRESH_NO_PHOTO_LIMIT", "25").strip() or "25")
 
+# Daily audit+fix (FULL only) - 1x/day guard
+DAILY_FIX = os.getenv("KENBOT_DAILY_FIX", "1").strip() == "1"
+DAILY_FIX_LIMIT = int(os.getenv("KENBOT_DAILY_FIX_LIMIT", "120").strip() or "120")
+DAILY_FIX_SLEEP = int(os.getenv("KENBOT_DAILY_FIX_SLEEP", "12").strip() or "12")
+DAILY_FIX_FALLBACK = os.getenv("KENBOT_DAILY_FIX_FALLBACK", "1").strip() == "1"
+
 # Lock anti-overlap (2 crons/jour)
 LOCK_TTL_SEC = int(os.getenv("KENBOT_LOCK_TTL_SEC", str(45 * 60)).strip() or str(45 * 60))
 LOCK_PATH = os.getenv("KENBOT_LOCK_PATH", "locks/runner.lock").strip()
@@ -313,6 +319,38 @@ def _extract_options_from_sticker_bytes(pdf_bytes: bytes) -> List[Dict[str, Any]
             tmp.unlink(missing_ok=True)
         except Exception:
             pass
+def _today_key_utc() -> str:
+    ts = time.gmtime()
+    return f"{ts.tm_year:04d}{ts.tm_mon:02d}{ts.tm_mday:02d}"
+
+def _try_daily_guard(sb, prefix: str) -> bool:
+    """
+    Empêche d'exécuter une tâche plus d'une fois par jour
+    (utile quand le cron FULL roule 2x/jour).
+    """
+    path = f"locks/{prefix}_{_today_key_utc()}.lock"
+
+    try:
+        b = sb.storage.from_(OUTPUTS_BUCKET).download(path)
+        if b:
+            return False  # déjà fait aujourd'hui
+    except Exception:
+        pass
+
+    payload = json.dumps({
+        "ts": int(time.time()),
+        "prefix": prefix,
+    }).encode("utf-8")
+
+    sb.storage.from_(OUTPUTS_BUCKET).upload(
+        path,
+        payload,
+        {
+            "content-type": "application/json",
+            "x-upsert": "true",
+        },
+    )
+    return True
 
 def _build_ad_text(sb, run_id: str, slug: str, v: Dict[str, Any], event: str) -> str:
     vin = (v.get("vin") or "").strip().upper()
@@ -351,6 +389,97 @@ def _build_ad_text(sb, run_id: str, slug: str, v: Dict[str, Any], event: str) ->
             print(f"STICKER_TO_AD: FAIL vin={vin} stock={stock} err={e}", flush=True)
 
     return generate_facebook_text(TEXT_ENGINE_URL, slug, event, v)
+
+def daily_audit_and_fix(sb, run_id: str) -> dict:
+    if RUN_MODE != "FULL":
+        return {"skipped": "not_full"}
+    if not DAILY_FIX:
+        return {"skipped": "disabled"}
+    if not _try_daily_guard(sb, "daily_fix"):
+        return {"skipped": "already_done_today"}
+
+    # Source of truth = inventory ACTIVE (site)
+    inv_rows = sb.table("inventory").select("stock,slug,title,url,vin,price_int,km_int,status").eq("status","ACTIVE").execute().data or []
+    site_by_stock = {(r.get("stock") or "").strip().upper(): r for r in inv_rows if (r.get("stock") or "").strip()}
+
+    # Posts FB
+    posts = sb.table("posts").select("post_id,stock,slug,status,base_text").neq("post_id", None).execute().data or []
+
+    restored = 0
+    text_fixed = 0
+    checked = 0
+
+    for p in posts[:DAILY_FIX_LIMIT]:
+        post_id = p.get("post_id")
+        stock = (p.get("stock") or "").strip().upper()
+        slug = (p.get("slug") or "").strip()
+        fb_status = (p.get("status") or "").upper()
+
+        if not post_id or not stock:
+            continue
+
+        site = site_by_stock.get(stock)
+        site_present = bool(site)
+
+        # A) RESTORE faux SOLD si encore sur site
+        if fb_status == "SOLD" and site_present:
+            base_text = (p.get("base_text") or "").strip()
+            msg = _strip_sold_banner(base_text) if base_text else "(texte manquant)"
+            if not DRY_RUN:
+                update_post_text(post_id, FB_TOKEN, msg)
+                sb.table("posts").update({
+                    "status":"ACTIVE",
+                    "sold_at": None,
+                    "last_updated_at": utc_now_iso(),
+                    "base_text": msg,
+                }).eq("post_id", post_id).execute()
+                time.sleep(max(2, DAILY_FIX_SLEEP))
+            restored += 1
+
+        # B) FIX TEXTE (pdf_ok -> sticker, sinon fallback si activé)
+        if site_present and fb_status != "SOLD":
+            vin = (site.get("vin") or "").strip().upper()
+            has_pdf_ok = False
+            if vin and len(vin) == 17:
+                try:
+                    pdf = sb.storage.from_(STICKERS_BUCKET).download(f"pdf_ok/{vin}.pdf")
+                    has_pdf_ok = bool(pdf) and pdf[:4] == b"%PDF"
+                except Exception:
+                    has_pdf_ok = False
+
+            vehicle_payload = {
+                "slug": site.get("slug") or slug,
+                "stock": stock,
+                "title": site.get("title") or "",
+                "url": site.get("url") or "",
+                "vin": vin,
+                "price_int": site.get("price_int"),
+                "km_int": site.get("km_int"),
+            }
+
+            if has_pdf_ok:
+                new_text = _build_ad_text(sb, run_id, vehicle_payload["slug"] or stock, vehicle_payload, event="PRICE_CHANGED")
+            elif DAILY_FIX_FALLBACK:
+                new_text = generate_facebook_text(TEXT_ENGINE_URL, vehicle_payload["slug"] or stock, "PRICE_CHANGED", vehicle_payload)
+            else:
+                new_text = None
+
+            if new_text:
+                old_text = (p.get("base_text") or "").strip()
+                if old_text.strip() != new_text.strip():
+                    if not DRY_RUN:
+                        update_post_text(post_id, FB_TOKEN, new_text)
+                        sb.table("posts").update({
+                            "base_text": new_text,
+                            "last_updated_at": utc_now_iso(),
+                            "status":"ACTIVE",
+                        }).eq("post_id", post_id).execute()
+                        time.sleep(max(2, DAILY_FIX_SLEEP))
+                    text_fixed += 1
+
+        checked += 1
+
+    return {"checked": checked, "restored": restored, "text_fixed": text_fixed}
 
 def build_meta_vehicle_feed_csv(current: Dict[str, Any]) -> bytes:
     fieldnames = ["id","title","description","availability","condition","price","link","image_link","brand","year"]
@@ -441,25 +570,6 @@ def meta_vs_site_report(current: Dict[str, Any]) -> bytes:
     for stock, url, p, site_p, status in rows:
         out.write(f"{stock},{url},{p},{'' if site_p is None else site_p},{status}\n")
     return out.getvalue().encode("utf-8")
-
-def _today_key_utc() -> str:
-    ts = time.gmtime()
-    return f"{ts.tm_year:04d}{ts.tm_mon:02d}{ts.tm_mday:02d}"
-
-def _daily_guard_path(prefix: str) -> str:
-    return f"locks/{prefix}_{_today_key_utc()}.lock"
-
-def _try_daily_guard(sb, prefix: str) -> bool:
-    path = _daily_guard_path(prefix)
-    try:
-        b = sb.storage.from_(OUTPUTS_BUCKET).download(path)
-        if b:
-            return False
-    except Exception:
-        pass
-    payload = json.dumps({"ts": int(time.time()), "prefix": prefix}).encode("utf-8")
-    sb.storage.from_(OUTPUTS_BUCKET).upload(path, payload, {"content-type":"application/json", "x-upsert":"true"})
-    return True
 
 def refresh_no_photo_daily(sb, run_id: str, current: Dict[str, Any]) -> int:
     if RUN_MODE != "FULL" or not REFRESH_NO_PHOTO_DAILY:
@@ -646,7 +756,11 @@ def main() -> None:
         disappeared_slugs = sorted(db_slugs - current_slugs)
         new_slugs = sorted(current_slugs - db_slugs)
         common_slugs = sorted(current_slugs & db_slugs)
-
+       
+        if scrape_ok:
+            daily_stats = daily_audit_and_fix(sb, run_id)
+            log_event(sb, "DAILY", "DAILY_FIX", {"run_id": run_id, **daily_stats})
+      
         # Recovered MISSING -> ACTIVE
         for slug in common_slugs:
             old = inv_db.get(slug) or {}
