@@ -1037,5 +1037,6 @@ def main() -> None:
         release_lock(sb)
 
 
-if __name__ == "__main__":
-    main()
+    if __name__ == "__main__":
+        main()
+
