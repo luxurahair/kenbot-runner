@@ -268,15 +268,10 @@ def read_json_from_storage(
         return None
 
 
-def cleanup_storage_runs(
-    sb,
-    bucket: str,
-    prefix: str,
-    keep: int = 5,
-) -> None:
+def cleanup_storage_runs(sb, bucket: str, prefix: str, keep: int = 5) -> None:
     """
-    Supprime les vieux runs dans Storage (bucket/prefix/<run_id>/...)
-    En gardant les `keep` plus récents.
+    Supprime récursivement les vieux runs dans Storage bucket/prefix/<run_id>/...
+    en gardant les `keep` plus récents.
     """
     bucket = (bucket or "").strip()
     prefix = (prefix or "").strip().strip("/")
@@ -284,28 +279,40 @@ def cleanup_storage_runs(
         return
 
     try:
-        items = sb.storage.from_(bucket).list(prefix) or []
+        top = sb.storage.from_(bucket).list(prefix) or []
     except Exception:
         return
 
-    run_ids = sorted(
-        [it.get("name") for it in items if it and it.get("name")],
-        reverse=True,
-    )
+    run_ids = sorted([it.get("name") for it in top if it and it.get("name")], reverse=True)
     old = run_ids[keep:]
-    for rid in old:
-        sub_prefix = f"{prefix}/{rid}"
+    if not old:
+        return
+
+    def list_all_files(folder: str) -> list[str]:
+        """Retourne tous les fichiers sous folder (récursif), avec chemins complets."""
+        out = []
         try:
-            sub_items = sb.storage.from_(bucket).list(sub_prefix) or []
+            items = sb.storage.from_(bucket).list(folder) or []
         except Exception:
-            continue
+            return out
 
-        paths: List[str] = []
-        for it in sub_items:
+        for it in items:
             name = it.get("name")
-            if name:
-                paths.append(f"{sub_prefix}/{name}")
+            if not name:
+                continue
+            full = f"{folder}/{name}"
+            # Supabase Storage: si metadata contient "metadata" ou "id", c'est fichier,
+            # sinon c'est souvent un "folder". On tente récursif de toute façon.
+            # Heuristique: si name contient un point, c’est un fichier probable.
+            if "." in name:
+                out.append(full)
+            else:
+                out.extend(list_all_files(full))
+        return out
 
+    for rid in old:
+        root = f"{prefix}/{rid}"
+        paths = list_all_files(root)
         if paths:
             try:
                 sb.storage.from_(bucket).remove(paths)
