@@ -673,6 +673,59 @@ def refresh_no_photo_daily(sb, run_id: str, current: Dict[str, Any]) -> int:
     log_event(sb, "NO_PHOTO", "NO_PHOTO_REFRESH_DONE", {"run_id": run_id, "checked": len(targets), "fixed": fixed})
     return fixed
 
+import re
+
+CLEAN_WITHWITHOUT_DAILY = os.getenv("KENBOT_CLEAN_WITHWITHOUT_DAILY", "1").strip() == "1"
+CLEAN_WITHWITHOUT_LIMIT = int(os.getenv("KENBOT_CLEAN_WITHWITHOUT_LIMIT", "5000").strip() or "5000")
+
+_STOCK_FILE_RE = re.compile(r"^([0-9A-Z]+)_(facebook|marketplace)\.txt$", re.I)
+
+def cleanup_with_without_daily(sb, run_id: str) -> dict:
+    if RUN_MODE != "FULL" or not CLEAN_WITHWITHOUT_DAILY:
+        return {"skipped": "disabled_or_not_full"}
+    if not _try_daily_guard(sb, "clean_withwithout"):
+        return {"skipped": "already_done_today"}
+
+    # stocks actifs
+    inv = (sb.table("inventory")
+             .select("stock")
+             .eq("status", "ACTIVE")
+             .limit(5000)
+             .execute().data) or []
+    active = set((r.get("stock") or "").strip().upper() for r in inv if (r.get("stock") or "").strip())
+
+    deleted = 0
+    checked = 0
+
+    for prefix in ["with", "without"]:
+        try:
+            items = sb.storage.from_(OUTPUTS_BUCKET).list(prefix) or []
+        except Exception:
+            continue
+
+        to_del = []
+        for it in items:
+            name = it.get("name") or ""
+            if "." not in name:
+                continue  # ignore folders like assets
+            m = _STOCK_FILE_RE.match(name)
+            if not m:
+                continue
+            st = m.group(1).upper()
+            checked += 1
+            if st not in active:
+                to_del.append(f"{prefix}/{name}")
+
+        # safety cap
+        to_del = to_del[:CLEAN_WITHWITHOUT_LIMIT]
+
+        if to_del and not DRY_RUN:
+            for i in range(0, len(to_del), 200):
+                sb.storage.from_(OUTPUTS_BUCKET).remove(to_del[i:i+200])
+            deleted += len(to_del)
+
+    log_event(sb, "CLEAN", "WITHWITHOUT_CLEAN", {"run_id": run_id, "checked": checked, "deleted": deleted})
+    return {"checked": checked, "deleted": deleted}
 
 def main() -> None:
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
@@ -812,6 +865,9 @@ def main() -> None:
         if scrape_ok:
             daily_stats = daily_audit_and_fix(sb, run_id)
             log_event(sb, "DAILY", "DAILY_FIX", {"run_id": run_id, **daily_stats})
+
+            ww = cleanup_with_without_daily(sb, run_id)
+            log_event(sb, "CLEAN", "WITHWITHOUT_CLEAN_RESULT", {"run_id": run_id, **ww})
 
         # Recovered MISSING -> ACTIVE (inclut stock si possible)
         for slug in common_slugs:
