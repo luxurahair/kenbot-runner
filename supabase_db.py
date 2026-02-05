@@ -70,6 +70,8 @@ def get_inventory_map(sb: Client) -> Dict[str, Dict[str, Any]]:
     return {r["slug"]: r for r in data if r.get("slug")}
 
 
+from postgrest.exceptions import APIError
+
 def upsert_post(sb: Client, row: Dict[str, Any]) -> None:
     if not row:
         return
@@ -77,17 +79,26 @@ def upsert_post(sb: Client, row: Dict[str, Any]) -> None:
     st = (row.get("stock") or "").strip().upper()
     if st:
         row["stock"] = st
-        # ✅ tu as maintenant un UNIQUE INDEX sur posts(stock) (WHERE stock IS NOT NULL)
-        sb.table("posts").upsert(row, on_conflict="stock").execute()
-        return
 
-    # fallback legacy: PK slug (ta table a posts_pkey sur slug)
     slug = (row.get("slug") or "").strip()
+    if slug:
+        row["slug"] = slug
+
+    # 1) Try stock (si l’index unique existe dans cette DB)
+    if st:
+        try:
+            sb.table("posts").upsert(row, on_conflict="stock").execute()
+            return
+        except APIError as e:
+            msg = str(e).lower()
+            # 42P10 / no unique constraint => fallback slug
+            if "42p10" not in msg and "no unique" not in msg:
+                raise
+
+    # 2) Fallback slug (PK)
     if not slug:
         return
-    row["slug"] = slug
     sb.table("posts").upsert(row, on_conflict="slug").execute()
-
 
 def get_posts_map(sb: Client) -> Dict[str, Dict[str, Any]]:
     res = sb.table("posts").select("*").execute()
