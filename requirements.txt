@@ -4,3 +4,4 @@ python-dotenv
 supabase
 pydantic
 pdfminer.six
+playwright==1.49.0
