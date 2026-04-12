@@ -118,8 +118,8 @@ INSTRUCTIONS:
    - 5-8 équipements/caractéristiques en points (en français, pas de jargon technique brut)
    - Si c'est un Stellantis avec sticker: mention "Window Sticker vérifié"
 
-3. FERME avec: le nom Daniel Giroux et le numéro 418-222-3939.
-   Ne mets PAS "Kennebec Dodge" dans le footer (il est ajouté automatiquement).
+3. NE METS PAS de footer, de coordonnées, de hashtags. Le footer sera ajouté automatiquement après.
+   NE COPIE PAS les sections "FICHE TECHNIQUE" ou "INFOS VEHICULE" dans le texte final.
 
 FORMAT DE SORTIE: Texte prêt à copier-coller sur Facebook. Utilise des emojis avec parcimonie dans le corps (pas dans l'intro).
 """
@@ -201,7 +201,7 @@ def generate_smart_text(
     # Construire le prompt
     prompt = _build_prompt_for_vehicle(ctx, event, options_text)
     if vin_specs_text:
-        prompt += f"\n\nSPECS DECODEES DU VIN (NHTSA):\n{vin_specs_text}"
+        prompt += f"\n\n[POUR TON INFO SEULEMENT — NE PAS COPIER TEL QUEL]\nFICHE TECHNIQUE:\n{vin_specs_text}\n→ Utilise ces infos pour enrichir ton texte, mais NE COPIE PAS cette section dans l'annonce."
     prompt += f"\n\nSTYLE D'INTRO: {style}"
 
     try:

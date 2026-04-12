@@ -685,14 +685,19 @@ def _humanize_sticker_text(
         "5. NE DUPLIQUE PAS les sections (echanges, footer, hashtags).\n"
         "   Le footer professionnel avec ma signature sera ajoute automatiquement.\n\n"
         "NE RAJOUTE RIEN a la fin. Pas de footer, pas de hashtags, pas de coordonnees.\n"
-        "Termine apres la derniere option ou le lien Window Sticker."
+        "Termine apres la derniere option ou le lien Window Sticker.\n\n"
+        "IMPORTANT: Les sections 'INFOS VEHICULE' et 'FICHE TECHNIQUE' ci-dessous sont pour TON INFORMATION SEULEMENT.\n"
+        "NE LES COPIE PAS dans l'annonce. Utilise ces infos pour enrichir ton intro et tes descriptions.\n"
+        "NE METS PAS de section 'INFOS VEHICULE' ou 'FICHE TECHNIQUE' ou 'SPECS VIN' dans le texte final.\n"
+        "NE METS PAS de markdown (###, **, etc.) — c'est du texte Facebook, pas un document.\n"
+        "NE METS PAS 'Window Sticker' ou 'NHTSA' dans le texte visible."
     )
 
     user_prompt = f"Humanise cette annonce:\n\n{raw_text}"
     if ctx_info:
-        user_prompt += f"\n\nINFOS VEHICULE:\n{ctx_info}"
+        user_prompt += f"\n\n[POUR TON INFO SEULEMENT — NE PAS COPIER DANS L'ANNONCE]\nINFOS VEHICULE:\n{ctx_info}"
     if vin_specs_text:
-        user_prompt += f"\n\nSPECS VIN (NHTSA):\n{vin_specs_text}"
+        user_prompt += f"\n\n[POUR TON INFO SEULEMENT — NE PAS COPIER DANS L'ANNONCE]\nFICHE TECHNIQUE:\n{vin_specs_text}"
 
     try:
         response = client.chat.completions.create(

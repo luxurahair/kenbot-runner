@@ -169,7 +169,7 @@ def build_ad(
 
     # --- Accessoires (Window Sticker) ---
     if options:
-        lines.append("✨ ACCESSOIRES OPTIONNELS (Window Sticker)")
+        lines.append("✨ ACCESSOIRES ET ÉQUIPEMENTS")
         lines.append("")
 
         seen_titles = set()
@@ -208,7 +208,7 @@ def build_ad(
 
         lines.append("")
         if v:
-            lines.append("📌 Window Sticker complet :")
+            lines.append("📋 Fiche détaillée du manufacturier :")
             lines.append(f"https://www.chrysler.com/hostd/windowsticker/getWindowStickerPdf.do?vin={v}")
             lines.append("")
 
