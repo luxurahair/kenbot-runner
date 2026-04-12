@@ -48,6 +48,7 @@ FOOTER_MARKER_THRESHOLD = 1
 def has_footer(text: str) -> bool:
     """
     Détecte si un footer Daniel Giroux est déjà présent dans le texte.
+    Seul le TÉLÉPHONE est fiable — "daniel giroux" peut être dans l'intro IA.
     
     Returns:
         True si un footer est détecté, False sinon.
@@ -55,15 +56,11 @@ def has_footer(text: str) -> bool:
     if not text:
         return False
     
-    low = text.lower()
-    
-    # Vérification rapide: le téléphone est unique et obligatoire
+    # Le téléphone est le seul marqueur fiable du footer
     if DEALER_PHONE in text or "418 222 3939" in text:
         return True
     
-    # Vérification secondaire: compter les marqueurs
-    matches = sum(1 for marker in FOOTER_MARKERS if marker in low)
-    return matches >= FOOTER_MARKER_THRESHOLD
+    return False
 
 
 def count_footer_occurrences(text: str) -> int:
