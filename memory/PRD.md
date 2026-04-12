@@ -1,45 +1,50 @@
 # PRD — Kenbot Ecosystem
 
-## Date: 2026-04-12
+## Date: 2026-04-12 (Updated: 2026-02-01)
 
 ## Projets
 
-### 1. kenbot-runner (Bot FB — Render Cron) ✅ EN PRODUCTION
+### 1. kenbot-runner (Bot FB — Render Cron) - EN PRODUCTION
 - Scrape Kennebec → IA → Facebook
-- Détection par STOCK: NEW / SOLD / UNSOLD / PRICE_CHANGED / PHOTOS_ADDED / CLEANUP
+- Detection par STOCK: NEW / SOLD / UNSOLD / PRICE_CHANGED / PHOTOS_ADDED / CLEANUP
 - Footer pro Daniel Giroux + hashtags SEO dynamiques
 - Nettoyeur post-IA (_clean_ai_output)
-- PROFIL DU VÉHICULE + CARACTÉRISTIQUES CERTIFIÉES (pas NHTSA/SPECS VIN)
+- PROFIL DU VEHICULE + CARACTERISTIQUES CERTIFIEES
 
-### 2. kenbot-dashboard (Dashboard — Vercel + Render) ✅ EN PRODUCTION
+### 2. kenbot-dashboard (Dashboard — Vercel + Render) - EN PRODUCTION
 - URL: https://kenbot-dashboard-five.vercel.app
 - Cockpit, Inventaire, Posts FB, Events, Architecture, Changelog
-- À POUSSER: onglet Kennebec vs FB (CompareTab)
+- A POUSSER: onglet Kennebec vs FB (CompareTab)
 
-### 3. kenbot-reprise (App Reprise — V1 CRÉÉE, V2 À FAIRE)
-- V1: Formulaire basique VIN+photos + admin
-- V2 TODO: Reproduire le design Torque complet
-  - Sidebar navigation (Évaluations, Inventaire, Pneus, Ventes, Clients)
-  - Formulaire multi-sections: Client, Véhicule (VIN auto), Options checkboxes, État véhicule (barre couleur MAUVAIS→EXCELLENT), Pare-brise, Garanties
-  - Liste évaluations avec tableau, filtres (Toutes/Complété/En attente/Perdu/Repris), recherche VIN/client
-  - Actions: imprimer, partager, modifier
-  - Boutons: Annuler, Sauvegarder brouillon, Sauvegarder et quitter
-  - Logos marques dans la liste
+### 3. kenbot-reprise (App Reprise) - V2 COMPLETE
+- **V2 LIVREE**: Design complet style Torque Management
+  - Sidebar navigation (Client, Vehicule, Options, Etat, Photos, Garanties, Notes)
+  - Formulaire multi-sections avec dark theme professionnel
+  - VIN auto-decode via API NHTSA
+  - Barre d'etat couleur MAUVAIS → EXCELLENT
+  - Options checkboxes par categories (Confort, Technologie, Securite, Performance, Exterieur)
+  - Dommages carrosserie (15 zones selectionnables)
+  - Upload photos (max 10)
+  - Garanties constructeur/prolongee avec toggles
+  - Admin dashboard avec login, tableau evaluations, filtres/recherche, vue detail
+  - Gestion des statuts: NOUVEAU, EN EVALUATION, OFFRE ENVOYEE, ACCEPTE, REFUSE
 - Login admin: 418-222-3939 / Daniel7$
-- Stack: React + FastAPI + Supabase + Vercel + Render
+- Stack: React (Tailwind + Shadcn) + FastAPI + Supabase
+- **ACTION REQUISE**: Creer la table `evaluations` dans Supabase (voir /app/kenbot-reprise/supabase_migration.sql)
 
-## Référence Torque (screenshots capturés)
-- Login page: dark theme, logo, phone+password
-- Nouvelle évaluation: formulaire multi-sections avec nav sidebar
-- Sections: Client, Véhicule (VIN décodage), Options, Commentaires, État (barre couleur), Pare-brise, Garanties
-- Liste: tableau Date/Véhicule/Client/Valeurs/Statut + filtres + pagination
-- 32 évaluations existantes chez Kennebec dans Torque
+## Tests (2026-02-01)
+- Frontend: 100% (toutes les sections UI et interactions fonctionnelles)
+- Backend: 100% (16/16 tests passes)
+- VIN decode API: Fonctionne (teste avec Jeep Grand Cherokee 2019)
+- Admin login: Fonctionne
+- Soumission formulaire: API appelee correctement (table Supabase requise)
 
 ## Backlog
-- P0: kenbot-reprise v2 (design Torque complet)
+- P0: Creer table evaluations dans Supabase + tester soumission end-to-end
 - P0: Pousser kenbot-dashboard GitHub (CompareTab)
-- P1: Phase A — Pipeline OpenAI unifié
+- P1: Phase A — Pipeline OpenAI unifie
 - P1: Multi-dealer Luxura
 - P2: Google Business Profile API
-- P2: Collecteur réactions FB
-- P3: Découpage runner_cron_prod.py en modules
+- P2: Domaine custom reprise.danielgiroux.ca
+- P2: Collecteur reactions FB
+- P3: Decoupage runner_cron_prod.py en modules
