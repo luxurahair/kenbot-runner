@@ -187,7 +187,7 @@ def build_ad(
             seen_titles.add(k)
 
             # ✅ IMPORTANT: on n'affiche JAMAIS le prix des options
-            lines.append(f"✅  {tt}")
+            lines.append(f"✅ {tt}")
 
             # sous-options filtrées + blacklist + dédoublonnage
             seen_details = set()
@@ -205,6 +205,8 @@ def build_ad(
 
                 lines.append(f"        ▫️ {dd}")
                 kept += 1
+
+            lines.append("")  # Ligne vide entre chaque groupe
 
         lines.append("")
         if v:
