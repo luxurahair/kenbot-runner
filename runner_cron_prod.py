@@ -425,7 +425,61 @@ def _extract_options_from_sticker_bytes(pdf_bytes: bytes) -> List[Dict[str, Any]
             except Exception:
                 pass
 
+def _clean_ai_output(text: str) -> str:
+    """
+    Nettoie le texte généré par l'IA — supprime les blocs techniques
+    que l'IA copie malgré les instructions.
+    """
+    if not text:
+        return text
+
+    lines = text.split("\n")
+    cleaned = []
+    skip_block = False
+
+    for line in lines:
+        ll = line.strip().lower()
+
+        # Détecter les blocs à supprimer
+        if any(marker in ll for marker in [
+            "infos vehicule:", "infos véhicule:",
+            "specs vin", "specs décodées", "specs decodees",
+            "fiche technique:", "nhtsa",
+            "[pour ton info", "[ne pas copier",
+            "connaissances spécifiques:", "connaissances specifiques:",
+        ]):
+            skip_block = True
+            continue
+
+        # Fin du bloc technique (ligne vide ou nouveau emoji/titre)
+        if skip_block:
+            if ll == "" or (line.strip() and line.strip()[0] in "🔥💥📊🧾✨✅▫📌📋🔁📸━👤🏆🏢📍📞💬🔄🤝#"):
+                skip_block = False
+            else:
+                continue
+
+        # Supprimer le markdown (###, **, etc.)
+        cleaned_line = line
+        if cleaned_line.strip().startswith("###"):
+            cleaned_line = cleaned_line.replace("###", "").strip()
+        if cleaned_line.strip().startswith("##"):
+            cleaned_line = cleaned_line.replace("##", "").strip()
+        cleaned_line = cleaned_line.replace("**", "")
+
+        cleaned.append(cleaned_line)
+
+    return "\n".join(cleaned).strip()
+
+
 def _ensure_contact_footer(text: str, v: Dict[str, Any] = None) -> str:
+    """Nettoie le texte IA puis ajoute le footer avec hashtags SEO dynamiques."""
+    text = _clean_ai_output(text)
+    if v:
+        seo_tags = _build_seo_hashtags(v)
+        footer = get_dealer_footer(hashtags=seo_tags)
+    else:
+        footer = None
+    return add_footer_if_missing(text, footer=footer)
     """Ajoute le footer avec hashtags SEO dynamiques."""
     if v:
         seo_tags = _build_seo_hashtags(v)
