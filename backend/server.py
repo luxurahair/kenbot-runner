@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form as FastForm
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -1128,6 +1128,186 @@ async def get_status_checks():
         if isinstance(check['timestamp'], str):
             check['timestamp'] = datetime.fromisoformat(check['timestamp'])
     return status_checks
+
+# ═══════════════════════════════════════════════════
+# KENBOT REPRISE — Vehicle Appraisal API
+# ═══════════════════════════════════════════════════
+import requests as http_req
+
+REPRISE_ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "4182223939")
+REPRISE_ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Daniel7$")
+REPRISE_STORAGE_BUCKET = "reprise-photos"
+
+VIN_DECODE_CACHE = {}
+
+def decode_vin_nhtsa(vin: str) -> dict:
+    vin = (vin or "").strip().upper()
+    if len(vin) != 17:
+        return {}
+    if vin in VIN_DECODE_CACHE:
+        return VIN_DECODE_CACHE[vin]
+    try:
+        r = http_req.get(
+            f"https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvalues/{vin}?format=json",
+            timeout=15,
+        )
+        if r.ok:
+            results = r.json().get("Results", [{}])[0]
+            specs = {
+                "make": results.get("Make", ""),
+                "model": results.get("Model", ""),
+                "year": results.get("ModelYear", ""),
+                "trim": results.get("Trim", ""),
+                "body": results.get("BodyClass", ""),
+                "engine_cylinders": results.get("EngineCylinders", ""),
+                "engine_displacement": results.get("DisplacementL", ""),
+                "engine_hp": results.get("EngineHP", ""),
+                "fuel_type": results.get("FuelTypePrimary", ""),
+                "transmission": results.get("TransmissionStyle", ""),
+                "drive_type": results.get("DriveType", ""),
+                "doors": results.get("Doors", ""),
+            }
+            specs = {k: v for k, v in specs.items() if v and str(v).strip()}
+            VIN_DECODE_CACHE[vin] = specs
+            return specs
+    except Exception as e:
+        logging.error(f"VIN decode error: {e}")
+    return {}
+
+
+@api_router.get("/vin/{vin}")
+async def reprise_decode_vin(vin: str):
+    vin = (vin or "").strip().upper()
+    if len(vin) != 17:
+        from fastapi import HTTPException
+        raise HTTPException(400, "VIN doit faire exactement 17 caracteres")
+    specs = decode_vin_nhtsa(vin)
+    if not specs:
+        from fastapi import HTTPException
+        raise HTTPException(404, "VIN non trouve dans la base NHTSA")
+    return {"vin": vin, "specs": specs}
+
+
+@api_router.post("/auth/login")
+async def reprise_admin_login(data: dict):
+    phone = (data.get("phone") or "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "").strip()
+    password = (data.get("password") or "").strip()
+    if phone == REPRISE_ADMIN_PHONE and password == REPRISE_ADMIN_PASSWORD:
+        import hashlib
+        token = hashlib.sha256(f"{phone}:{password}:{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()[:32]
+        return {"success": True, "token": token, "name": "Daniel Giroux"}
+    from fastapi import HTTPException
+    raise HTTPException(401, "Identifiants incorrects")
+
+
+@api_router.post("/evaluations")
+async def reprise_create_evaluation(data: dict):
+    if not sb:
+        from fastapi import HTTPException
+        raise HTTPException(500, "Base de donnees non connectee")
+    vin = (data.get("vin") or "").strip().upper()
+    specs = decode_vin_nhtsa(vin) if len(vin) == 17 else {}
+    engine_parts = [specs.get("engine_cylinders", ""), "cyl", specs.get("engine_displacement", ""), "L", specs.get("engine_hp", ""), "HP"]
+    engine_str = " ".join(p for p in engine_parts if p).strip()
+    evaluation = {
+        "id": str(uuid.uuid4()),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "status": "NOUVEAU",
+        "client_name": f"{(data.get('prenom') or '').strip()} {(data.get('nom') or '').strip()}".strip(),
+        "client_phone": (data.get("telephone") or "").strip(),
+        "client_email": (data.get("courriel") or "").strip(),
+        "client_notes": (data.get("notes_client") or "").strip(),
+        "vin": vin,
+        "make": specs.get("make", ""),
+        "model": specs.get("model", ""),
+        "year": specs.get("year", ""),
+        "trim": specs.get("trim", ""),
+        "engine": engine_str if engine_str != "cyl L HP" else "",
+        "drive_type": specs.get("drive_type", ""),
+        "fuel_type": specs.get("fuel_type", ""),
+        "km": data.get("km"),
+        "paiement_restant": data.get("paiement_restant"),
+        "etat_general": data.get("etat_general", ""),
+        "photos": data.get("photos", []),
+        "vin_decoded": specs,
+        "form_data": {
+            k: v for k, v in data.items()
+            if k not in ("photos",)
+        },
+    }
+    try:
+        sb.table("evaluations").insert(evaluation).execute()
+        return {"success": True, "id": evaluation["id"]}
+    except Exception as e:
+        logging.error(f"Insert evaluation error: {e}")
+        from fastapi import HTTPException
+        raise HTTPException(500, str(e))
+
+
+@api_router.post("/evaluations/upload-photo")
+async def reprise_upload_photo(file: UploadFile = File(...), evaluation_id: str = FastForm("")):
+    if not sb:
+        from fastapi import HTTPException
+        raise HTTPException(500, "Base de donnees non connectee")
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        from fastapi import HTTPException
+        raise HTTPException(400, "Photo trop grande (max 10MB)")
+    ext = file.filename.split(".")[-1] if file.filename and "." in file.filename else "jpg"
+    path = f"{evaluation_id or 'temp'}/{uuid.uuid4().hex[:8]}.{ext}"
+    try:
+        sb.storage.from_(REPRISE_STORAGE_BUCKET).upload(path, content, {"content-type": file.content_type or "image/jpeg"})
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{REPRISE_STORAGE_BUCKET}/{path}"
+        return {"success": True, "url": public_url, "path": path}
+    except Exception as e:
+        logging.error(f"Upload error: {e}")
+        from fastapi import HTTPException
+        raise HTTPException(500, str(e))
+
+
+@api_router.get("/evaluations")
+async def reprise_list_evaluations():
+    if not sb:
+        return {"evaluations": []}
+    try:
+        result = sb.table("evaluations").select("*").order("created_at", desc=True).limit(200).execute()
+        return {"evaluations": result.data or []}
+    except Exception as e:
+        logging.error(f"List evaluations error: {e}")
+        return {"evaluations": [], "error": str(e)}
+
+
+@api_router.get("/evaluations/{eval_id}")
+async def reprise_get_evaluation(eval_id: str):
+    if not sb:
+        from fastapi import HTTPException
+        raise HTTPException(500, "Base de donnees non connectee")
+    try:
+        result = sb.table("evaluations").select("*").eq("id", eval_id).limit(1).execute()
+        if not result.data:
+            from fastapi import HTTPException
+            raise HTTPException(404, "Evaluation non trouvee")
+        return {"evaluation": result.data[0]}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(500, str(e))
+
+
+@api_router.patch("/evaluations/{eval_id}")
+async def reprise_update_evaluation(eval_id: str, data: dict):
+    if not sb:
+        from fastapi import HTTPException
+        raise HTTPException(500, "Base de donnees non connectee")
+    allowed = {"status", "admin_notes", "offre_montant"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        sb.table("evaluations").update(update).eq("id", eval_id).execute()
+        return {"success": True}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(500, str(e))
+
 
 app.include_router(api_router)
 

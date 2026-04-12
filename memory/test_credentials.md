@@ -1,8 +1,10 @@
 # Test Credentials
 
-## kenbot-reprise (App Reprise)
-- Admin login: 418-222-3939
-- Admin password: Liana2018$
+## Kenbot Reprise - Admin Login
+- Phone: 4182223939
+- Password: Daniel7$
+- URL: /admin
 
-## Supabase
-- Connection details in kenbot-dashboard/api/.env.example
+## App URLs
+- Public Form: /evaluer
+- Admin Dashboard: /admin
