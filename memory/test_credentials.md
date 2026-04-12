@@ -1,3 +1,8 @@
 # Test Credentials
-# Agent writes here when creating/modifying auth credentials (admin accounts, test users).
-# Testing agent reads this before auth tests. Fork/continuation agents read on startup.
+
+## kenbot-reprise (App Reprise)
+- Admin login: 418-222-3939
+- Admin password: Liana2018$
+
+## Supabase
+- Connection details in kenbot-dashboard/api/.env.example
