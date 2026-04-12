@@ -428,7 +428,7 @@ def _extract_options_from_sticker_bytes(pdf_bytes: bytes) -> List[Dict[str, Any]
 def _clean_ai_output(text: str) -> str:
     """
     Nettoie le texte généré par l'IA — supprime les blocs techniques
-    que l'IA copie malgré les instructions.
+    avec les ANCIENS noms, garde les NOUVEAUX noms pro.
     """
     if not text:
         return text
@@ -440,25 +440,24 @@ def _clean_ai_output(text: str) -> str:
     for line in lines:
         ll = line.strip().lower()
 
-        # Détecter les blocs à supprimer
+        # Supprimer les ANCIENS noms techniques (l'IA a parfois copié)
         if any(marker in ll for marker in [
             "infos vehicule:", "infos véhicule:",
             "specs vin", "specs décodées", "specs decodees",
             "fiche technique:", "nhtsa",
             "[pour ton info", "[ne pas copier",
-            "connaissances spécifiques:", "connaissances specifiques:",
         ]):
             skip_block = True
             continue
 
-        # Fin du bloc technique (ligne vide ou nouveau emoji/titre)
+        # Fin du bloc technique (ligne vide ou nouveau contenu)
         if skip_block:
-            if ll == "" or (line.strip() and line.strip()[0] in "🔥💥📊🧾✨✅▫📌📋🔁📸━👤🏆🏢📍📞💬🔄🤝#"):
+            if ll == "" or (line.strip() and line.strip()[0] in "\U0001f525\U0001f4a5\U0001f4ca\U0001f9fe\u2728\u2705\u25ab\U0001f4cc\U0001f4cb\U0001f501\U0001f4f8\u2501\U0001f464\U0001f3c6\U0001f3e2\U0001f4cd\U0001f4de\U0001f4ac\U0001f504\U0001f91d#"):
                 skip_block = False
             else:
                 continue
 
-        # Supprimer le markdown (###, **, etc.)
+        # Supprimer le markdown
         cleaned_line = line
         if cleaned_line.strip().startswith("###"):
             cleaned_line = cleaned_line.replace("###", "").strip()
@@ -740,18 +739,18 @@ def _humanize_sticker_text(
         "   Le footer professionnel avec ma signature sera ajoute automatiquement.\n\n"
         "NE RAJOUTE RIEN a la fin. Pas de footer, pas de hashtags, pas de coordonnees.\n"
         "Termine apres la derniere option ou le lien Window Sticker.\n\n"
-        "IMPORTANT: Les sections 'INFOS VEHICULE' et 'FICHE TECHNIQUE' ci-dessous sont pour TON INFORMATION SEULEMENT.\n"
-        "NE LES COPIE PAS dans l'annonce. Utilise ces infos pour enrichir ton intro et tes descriptions.\n"
-        "NE METS PAS de section 'INFOS VEHICULE' ou 'FICHE TECHNIQUE' ou 'SPECS VIN' dans le texte final.\n"
-        "NE METS PAS de markdown (###, **, etc.) — c'est du texte Facebook, pas un document.\n"
-        "NE METS PAS 'Window Sticker' ou 'NHTSA' dans le texte visible."
+        "IMPORTANT: Intègre les informations ci-dessous dans l'annonce de façon professionnelle.\n"
+        "La section 'PROFIL DU VÉHICULE' doit apparaitre avec ce titre exact.\n"
+        "La section 'CARACTÉRISTIQUES CERTIFIÉES' doit apparaitre avec ce titre exact.\n"
+        "NE METS PAS de markdown (###, **, etc.) — c'est du texte Facebook.\n"
+        "NE METS PAS 'NHTSA', 'Window Sticker', 'VIN decode' ou tout terme technique interne."
     )
 
     user_prompt = f"Humanise cette annonce:\n\n{raw_text}"
     if ctx_info:
-        user_prompt += f"\n\n[POUR TON INFO SEULEMENT — NE PAS COPIER DANS L'ANNONCE]\nINFOS VEHICULE:\n{ctx_info}"
+        user_prompt += f"\n\nPROFIL DU VÉHICULE:\n{ctx_info}"
     if vin_specs_text:
-        user_prompt += f"\n\n[POUR TON INFO SEULEMENT — NE PAS COPIER DANS L'ANNONCE]\nFICHE TECHNIQUE:\n{vin_specs_text}"
+        user_prompt += f"\n\nCARACTÉRISTIQUES CERTIFIÉES:\n{vin_specs_text}"
 
     try:
         response = client.chat.completions.create(

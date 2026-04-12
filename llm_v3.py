@@ -119,7 +119,8 @@ INSTRUCTIONS:
    - Si c'est un Stellantis avec sticker: mention "Window Sticker vérifié"
 
 3. NE METS PAS de footer, de coordonnées, de hashtags. Le footer sera ajouté automatiquement après.
-   NE COPIE PAS les sections "FICHE TECHNIQUE" ou "INFOS VEHICULE" dans le texte final.
+   Intègre les 'CARACTÉRISTIQUES CERTIFIÉES' dans l'annonce avec ce titre exact.
+   NE METS PAS 'NHTSA', 'VIN decode' ou tout terme technique interne.
 
 FORMAT DE SORTIE: Texte prêt à copier-coller sur Facebook. Utilise des emojis avec parcimonie dans le corps (pas dans l'intro).
 """
@@ -201,7 +202,7 @@ def generate_smart_text(
     # Construire le prompt
     prompt = _build_prompt_for_vehicle(ctx, event, options_text)
     if vin_specs_text:
-        prompt += f"\n\n[POUR TON INFO SEULEMENT — NE PAS COPIER TEL QUEL]\nFICHE TECHNIQUE:\n{vin_specs_text}\n→ Utilise ces infos pour enrichir ton texte, mais NE COPIE PAS cette section dans l'annonce."
+        prompt += f"\n\nCARACTÉRISTIQUES CERTIFIÉES:\n{vin_specs_text}"
     prompt += f"\n\nSTYLE D'INTRO: {style}"
 
     try:
