@@ -4,7 +4,7 @@
 
 ## Ce qui a été fait
 
-### Session 1-11 (résumé)
+### Sessions 1-11 (résumé)
 - Dashboard React + FastAPI connecté Supabase live
 - Intelligence véhicule (27 marques, 43 modèles, 194 trims)
 - llm_v3.py (GPT-4o, Daniel Giroux, 5 styles d'intro)
@@ -13,34 +13,44 @@
 - Détection VENDU/SOLD dans le cron
 - Séparation kenbot-dashboard standalone (Render + Vercel)
 
-### Session 12 - Corrections Critiques (2026-04-12)
-- **FIX: `publish_with_photos` inexistant** → remplacé par publish_photos_unpublished + create_post_with_attached_media
-- **FIX: Duplicate key `23505` sur slug** → upsert_post on_conflict="slug" + fallback 3 niveaux
-- **FIX: Double appel `_build_ad_text`** → PHOTOS_ADDED réutilise msg déjà généré (÷2 appels OpenAI)
-- **AJOUT: Pré-cache PDFs Stellantis 2018+** → vérifie/télécharge tous les PDFs au début du cron
-- **AJOUT: `ensure_sticker_cached` amélioré** → retourne pdf_bytes directement, upsert_sticker_pdf isolé
-- **AJOUT: `_extract_year()` + `_is_stellantis_2018_plus()`** → extraction année titre/VIN position 10
-- **AJOUT: Détection NO_PHOTO par comparaison FB vs Kennebec** → Si FB a 0-1 photo et Kennebec a plusieurs → PHOTOS_ADDED. Remplace la détection par flags/text hints.
-- **AJOUT: Programme de test complet** (`tests/test_pipeline_complet.py`) — 88 tests: VIN, NHTSA, PDF extraction, structure annonce, footer, lien sticker, no_photo
+### Session 12 (2026-04-12)
+- FIX: publish_with_photos → publish_photos_unpublished + create_post_with_attached_media
+- FIX: Duplicate key slug → on_conflict="slug" + fallback 3 niveaux
+- FIX: Double _build_ad_text → réutilise msg (÷2 appels OpenAI)
+- FIX: FK sticker_pdfs → upsert_scrape_run AVANT pré-cache
+- FIX: Photos commentaires 403 → complètement supprimé (max 10 photos/post)
+- FIX: Double footer → ad_builder.py ne rajoute plus les échanges
+- AJOUT: Toutes comparaisons par STOCK (pas slug): PRICE_CHANGED, PHOTOS_ADDED, SOLD
+- AJOUT: UNSOLD — restaure les faux VENDU si stock encore sur Kennebec
+- AJOUT: Cleanup auto double footer (max 10/run)
+- AJOUT: Footer pro Daniel Giroux (conseiller expert 20 ans, hashtags SEO dynamiques)
+- AJOUT: Plus de lien kennebecdodge.ca dans les annonces
+- AJOUT: Prix fallback depuis inventory DB
+- AJOUT: Intro PRICE_CHANGED avec montant rabais
+- AJOUT: Endpoint /api/vehicles/compare + CompareTab (Kennebec vs FB)
+- FIX: Dashboard Vercel live (craco→react-scripts, ajv fix, imports fix)
+- Dashboard URL: https://kenbot-dashboard-five.vercel.app
 
 ## Architecture
 ```
-/app
-├── kenbot-runner/ (Bot)
-│   ├── runner_cron_prod.py (1464 lignes - cron principal)
-│   ├── llm_v3.py, vehicle_intelligence.py, vin_decoder.py
-│   ├── fb_api.py, supabase_db.py, kennebec_scrape.py
-│   ├── sticker_to_ad.py, ad_builder.py, footer_utils.py
-│   └── tests/test_pipeline_complet.py (88 tests)
-└── kenbot-dashboard/ (Dashboard standalone)
-    ├── api/server.py (FastAPI sur Render)
-    └── frontend/src/App.js (React sur Vercel)
+kenbot-runner/ (Bot — Render Cron)
+├── runner_cron_prod.py (orchestrateur ~1700 lignes)
+├── kennebec_scrape.py, vin_decoder.py, vehicle_intelligence.py
+├── llm_v3.py, sticker_to_ad.py, ad_builder.py, footer_utils.py
+├── fb_api.py, supabase_db.py, meta_compare_supabase.py
+└── tests/ (88 + 11 tests)
+
+kenbot-dashboard/ (Dashboard — Vercel + Render)
+├── api/server.py (FastAPI)
+└── frontend/src/App.js (React)
 ```
 
 ## Backlog
-- P0: Push GitHub → vérifier logs cron (corrections critiques)
+- P0: Vérifier logs cron (UNSOLD, CLEANUP, nouveau footer)
+- P0: Pousser App.js/server.py mis à jour sur kenbot-dashboard GitHub
 - P1: Phase A — Pipeline OpenAI unifié (JSON structuré)
-- P1: Multi-dealer Luxura (config séparée)
-- P2: Phase B — Review pass IA (contrôle qualité pré-publication)
-- P2: Alertes/notifications (token FB expiré, échec cron)
-- P3: Découper runner_cron_prod.py en modules (1464 lignes)
+- P1: Multi-dealer Luxura
+- P2: Collecteur réactions FB
+- P2: Google Business Profile API
+- P2: Alertes/notifications
+- P3: Découpage runner_cron_prod.py en modules
