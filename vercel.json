@@ -1,5 +1,6 @@
 {
-  "buildCommand": "cd kenbot-dashboard/frontend && npm install --legacy-peer-deps && npm run build",
+  "installCommand": "cd kenbot-dashboard/frontend && npm install --legacy-peer-deps",
+  "buildCommand": "cd kenbot-dashboard/frontend && npm run build",
   "outputDirectory": "kenbot-dashboard/frontend/build",
   "framework": null,
   "rewrites": [
