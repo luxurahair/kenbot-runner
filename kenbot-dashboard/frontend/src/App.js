@@ -1333,6 +1333,7 @@ function RepriseTab({ standalone, user }) {
   const [vinSpecs, setVinSpecs] = useState(null);
   const [vinLoading, setVinLoading] = useState(false);
   const [vinError, setVinError] = useState('');
+  const [vinScanning, setVinScanning] = useState(false);
   const [photos, setPhotos] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -1363,6 +1364,27 @@ function RepriseTab({ standalone, user }) {
       setVinSpecs((await r.json()).specs);
     } catch (e) { setVinError(e.message); }
     setVinLoading(false);
+  };
+
+  const handleVinScan = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setVinScanning(true); setVinError('');
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const r = await fetch(`${API}/api/vin/scan-photo`, { method: 'POST', body: fd });
+      const data = await r.json();
+      if (data.success && data.vin) {
+        up('vin', data.vin);
+        if (data.specs) setVinSpecs(data.specs);
+      } else {
+        setVinError(data.error || 'VIN non detecte');
+        if (data.partial) up('vin', data.partial);
+      }
+    } catch (err) { setVinError('Erreur scan'); }
+    setVinScanning(false);
+    e.target.value = '';
   };
 
   const handlePhotos = async (e) => {
@@ -1468,10 +1490,13 @@ function RepriseTab({ standalone, user }) {
       {/* 2. VEHICULE */}
       <div style={rs.card}><div style={rs.cardTitle}>2. Identification du vehicule</div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <input style={{ ...rs.input, flex: 1, minWidth: '200px', fontFamily: 'IBM Plex Mono', textTransform: 'uppercase' }} value={form.vin} onChange={e => { up('vin', e.target.value.toUpperCase().slice(0, 17)); setVinError(''); }} maxLength={17} placeholder="Entrez le VIN (17 caracteres)" data-testid="reprise-vin" />
+          <input style={{ ...rs.input, flex: 1, minWidth: '160px', fontFamily: 'IBM Plex Mono', textTransform: 'uppercase' }} value={form.vin} onChange={e => { up('vin', e.target.value.toUpperCase().slice(0, 17)); setVinError(''); }} maxLength={17} placeholder="Entrez le VIN (17 caracteres)" data-testid="reprise-vin" />
+          <input type="file" accept="image/*" onChange={handleVinScan} style={{ display: 'none' }} id="vin-scan-input" />
+          <label htmlFor="vin-scan-input" style={{ ...rs.btnSecondary, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', cursor: vinScanning ? 'wait' : 'pointer', opacity: vinScanning ? 0.6 : 1, whiteSpace: 'nowrap' }} data-testid="vin-scan-btn">{vinScanning ? 'Lecture...' : 'Scanner'}</label>
           <button style={rs.btnPrimary} onClick={decodeVin} disabled={vinLoading} data-testid="reprise-decode">{vinLoading ? '...' : 'Decoder'}</button>
         </div>
         <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '4px' }}>{form.vin.length}/17</div>
+        {vinScanning && <div style={{ color: 'var(--accent-blue)', fontSize: '0.8rem', marginTop: '0.5rem' }}>Analyse de la photo en cours...</div>}
         {vinError && <div style={{ color: 'var(--accent-red)', fontSize: '0.8rem', marginTop: '0.5rem' }}>{vinError}</div>}
         {vinSpecs && (
           <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--surface-secondary)', borderRadius: '6px', border: '1px solid var(--border)' }}>

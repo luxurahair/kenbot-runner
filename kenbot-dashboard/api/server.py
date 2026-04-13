@@ -1155,6 +1155,34 @@ async def reprise_decode_vin(vin: str):
         raise HTTPException(404, "VIN non trouve")
     return {"vin": vin, "specs": specs}
 
+@api_router.post("/vin/scan-photo")
+async def reprise_scan_vin_photo(file: UploadFile = File(...)):
+    from fastapi import HTTPException
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(400, "Image trop grande (max 10MB)")
+    api_key = os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(500, "Cle IA non configuree")
+    import base64
+    b64 = base64.b64encode(content).decode("utf-8")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+        chat = LlmChat(api_key=api_key, session_id=f"vin-scan-{uuid.uuid4().hex[:8]}", system_message="Tu extrais le numero VIN (17 caracteres alphanumeriques, pas de I, O, Q) depuis des photos. Reponds UNIQUEMENT avec le VIN ou 'ERREUR' si illisible.")
+        chat.with_model("openai", "gpt-4o")
+        response = await chat.send_message(UserMessage(text="Lis le VIN sur cette image. Reponds UNIQUEMENT le VIN.", file_contents=[ImageContent(image_base64=b64)]))
+        result = response.strip().upper().replace(" ", "").replace("-", "")
+        if result.startswith("ERREUR"):
+            return {"success": False, "error": result}
+        clean = "".join(c for c in result if c.isalnum())[:17]
+        if len(clean) == 17:
+            specs = decode_vin_nhtsa(clean)
+            return {"success": True, "vin": clean, "specs": specs}
+        return {"success": False, "error": f"VIN illisible ({len(clean)} car.)", "partial": clean}
+    except Exception as e:
+        logging.error(f"VIN scan error: {e}")
+        raise HTTPException(500, str(e))
+
 @api_router.post("/reprise/auth/login")
 async def reprise_login(data: dict):
     from fastapi import HTTPException
