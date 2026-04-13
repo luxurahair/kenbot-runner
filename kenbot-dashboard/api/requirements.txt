@@ -1,7 +1,9 @@
 fastapi
 uvicorn[standard]
 python-dotenv
+python-multipart
 supabase
 openai
 requests
 pydantic
+emergentintegrations
