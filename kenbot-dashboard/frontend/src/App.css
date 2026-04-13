@@ -617,8 +617,9 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 
 .ck-text-wrap {
   border-left: 4px solid var(--accent-blue);
-  background: #FAFAFA;
+  background: #111113;
   margin-top: 0.5rem;
+  border-radius: 4px;
 }
 .ck-text-actions {
   padding: 0.5rem 1rem;
@@ -635,6 +636,7 @@ tr:hover td { background: rgba(255,255,255,0.02); }
   word-break: break-word;
   max-height: 400px;
   overflow-y: auto;
+  color: #e4e4e7;
 }
 .ck-error {
   padding: 1rem 1.5rem;
@@ -1061,12 +1063,14 @@ tr:hover td { background: rgba(255,255,255,0.02); }
   white-space: pre-wrap;
   word-break: break-word;
   flex: 1;
-  background: #FAFAFA;
+  background: #111113;
+  color: #e4e4e7;
   border-left: 4px solid var(--accent-blue);
   margin: 1rem 1.5rem;
   padding: 1.25rem 1.5rem;
   max-height: 55vh;
   overflow-y: auto;
+  border-radius: 4px;
 }
 .tp-error {
   padding: 1.5rem;
