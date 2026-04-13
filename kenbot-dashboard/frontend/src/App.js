@@ -1341,7 +1341,7 @@ function RepriseTab({ standalone, user }) {
   const [evalId] = useState(() => Math.random().toString(36).slice(2));
   const [form, setForm] = useState({
     prenom: '', nom: '', telephone: '', courriel: '',
-    type_transaction: '', solde_du: false, solde_montant: '', interet: '', provenance: '', notes_client: '',
+    type_transaction: '', solde_du: false, solde_montant: '', institution: '', versement: '', frequence_versement: '', interet: '', provenance: '', notes_client: '',
     vin: '', km: '', couleur_ext: '', couleur_int: '', nombre_cles: '2',
     options: [], etat_general: 3, etat_parebrise: 'Bon etat', etat_mecanique: '', dommages: [],
     garantie_constructeur: false, garantie_constructeur_date: '', garantie_prolongee: false, garantie_prolongee_detail: '',
@@ -1469,26 +1469,46 @@ function RepriseTab({ standalone, user }) {
       {/* ALL SECTIONS SCROLLABLE */}
 
       {/* 1. CLIENT */}
-      <div style={rs.card}><div style={rs.cardTitle}>1. Informations du client</div>
+      <div style={rs.card}><div style={rs.cardTitle}>1. Vos coordonnees</div>
         <div style={rs.row}>
-          <div><label style={rs.label}>Prenom *</label><input style={rs.input} value={form.prenom} onChange={e => up('prenom', e.target.value)} data-testid="reprise-prenom" /></div>
-          <div><label style={rs.label}>Nom *</label><input style={rs.input} value={form.nom} onChange={e => up('nom', e.target.value)} data-testid="reprise-nom" /></div>
+          <div><label style={rs.label}>Votre prenom *</label><input style={rs.input} value={form.prenom} onChange={e => up('prenom', e.target.value)} data-testid="reprise-prenom" placeholder="Prenom" /></div>
+          <div><label style={rs.label}>Votre nom *</label><input style={rs.input} value={form.nom} onChange={e => up('nom', e.target.value)} data-testid="reprise-nom" placeholder="Nom" /></div>
         </div>
         <div style={{ ...rs.row, marginTop: '0.75rem' }}>
-          <div><label style={rs.label}>Telephone *</label><input style={rs.input} type="tel" value={form.telephone} onChange={e => up('telephone', e.target.value)} data-testid="reprise-tel" /></div>
-          <div><label style={rs.label}>Courriel</label><input style={rs.input} type="email" value={form.courriel} onChange={e => up('courriel', e.target.value)} /></div>
+          <div><label style={rs.label}>Votre telephone *</label><input style={rs.input} type="tel" value={form.telephone} onChange={e => up('telephone', e.target.value)} data-testid="reprise-tel" placeholder="418-555-1234" /></div>
+          <div><label style={rs.label}>Votre courriel</label><input style={rs.input} type="email" value={form.courriel} onChange={e => up('courriel', e.target.value)} placeholder="email@exemple.com" /></div>
         </div>
       </div>
-      <div style={rs.card}><div style={rs.cardTitle}>Transaction</div>
+      <div style={rs.card}><div style={rs.cardTitle}>Votre projet</div>
         <div style={rs.row}>
           <div><label style={rs.label}>Vous desirez</label><select style={rs.input} value={form.type_transaction} onChange={e => up('type_transaction', e.target.value)}><option value="">—</option>{TYPES_TRANSACTION.map(t => <option key={t}>{t}</option>)}</select></div>
           <div><label style={rs.label}>Vous recherchez</label><select style={rs.input} value={form.interet} onChange={e => up('interet', e.target.value)}><option value="">—</option>{INTERET_CLIENT.map(t => <option key={t}>{t}</option>)}</select></div>
           <div><label style={rs.label}>Comment nous avez-vous connu?</label><select style={rs.input} value={form.provenance} onChange={e => up('provenance', e.target.value)}><option value="">—</option>{PROVENANCES.map(p => <option key={p}>{p}</option>)}</select></div>
         </div>
       </div>
+      <div style={rs.card}><div style={rs.cardTitle}>Votre financement actuel</div>
+        <div><label style={rs.label}>Avez-vous un solde a payer sur votre vehicule?</label>
+          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.4rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.9rem' }}><input type="radio" name="solde" checked={form.solde_du === true} onChange={() => up('solde_du', true)} /> Oui</label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.9rem' }}><input type="radio" name="solde" checked={form.solde_du === false} onChange={() => up('solde_du', false)} /> Non</label>
+          </div>
+        </div>
+        {form.solde_du === true && (
+          <>
+            <div style={{ ...rs.row, marginTop: '0.75rem' }}>
+              <div><label style={rs.label}>Balance due (montant restant)</label><input style={rs.input} value={form.solde_montant} onChange={e => up('solde_montant', e.target.value)} placeholder="Ex: 12 000 $" /></div>
+              <div><label style={rs.label}>Avec quelle institution financiere?</label><input style={rs.input} value={form.institution} onChange={e => up('institution', e.target.value)} placeholder="Ex: Desjardins, TD, RBC..." /></div>
+            </div>
+            <div style={{ ...rs.row, marginTop: '0.75rem' }}>
+              <div><label style={rs.label}>Votre versement</label><input style={rs.input} value={form.versement} onChange={e => up('versement', e.target.value)} placeholder="Ex: 350 $" /></div>
+              <div><label style={rs.label}>Frequence</label><select style={rs.input} value={form.frequence_versement} onChange={e => up('frequence_versement', e.target.value)}><option value="">—</option><option value="semaine">Par semaine</option><option value="2semaines">Aux 2 semaines</option><option value="mois">Par mois</option></select></div>
+            </div>
+          </>
+        )}
+      </div>
 
       {/* 2. VEHICULE */}
-      <div style={rs.card}><div style={rs.cardTitle}>2. Identification du vehicule</div>
+      <div style={rs.card}><div style={rs.cardTitle}>2. Votre vehicule</div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
           <input style={{ ...rs.input, flex: 1, minWidth: '160px', fontFamily: 'IBM Plex Mono', textTransform: 'uppercase' }} value={form.vin} onChange={e => { up('vin', e.target.value.toUpperCase().slice(0, 17)); setVinError(''); }} maxLength={17} placeholder="Entrez le VIN (17 caracteres)" data-testid="reprise-vin" />
           <input type="file" accept="image/*" onChange={handleVinScan} style={{ display: 'none' }} id="vin-scan-input" />
@@ -1508,17 +1528,18 @@ function RepriseTab({ standalone, user }) {
           </div>
         )}
       </div>
-      <div style={rs.card}><div style={rs.cardTitle}>Details du vehicule</div>
+      <div style={rs.card}><div style={rs.cardTitle}>Informations supplementaires</div>
         <div style={rs.row}>
-          <div><label style={rs.label}>Kilometrage</label><input style={rs.input} value={form.km} onChange={e => up('km', e.target.value)} data-testid="reprise-km" /></div>
-          <div><label style={rs.label}>Cles</label><select style={rs.input} value={form.nombre_cles} onChange={e => up('nombre_cles', e.target.value)}>{['0','1','2','3+'].map(n => <option key={n}>{n}</option>)}</select></div>
-          <div><label style={rs.label}>Couleur ext.</label><select style={rs.input} value={form.couleur_ext} onChange={e => up('couleur_ext', e.target.value)}><option value="">—</option>{COULEURS_EXT.map(c => <option key={c}>{c}</option>)}</select></div>
-          <div><label style={rs.label}>Couleur int.</label><select style={rs.input} value={form.couleur_int} onChange={e => up('couleur_int', e.target.value)}><option value="">—</option>{COULEURS_INT.map(c => <option key={c}>{c}</option>)}</select></div>
+          <div><label style={rs.label}>Kilometrage actuel</label><input style={rs.input} value={form.km} onChange={e => up('km', e.target.value)} data-testid="reprise-km" placeholder="Ex: 85 000" /></div>
+          <div><label style={rs.label}>Combien de cles avez-vous?</label><select style={rs.input} value={form.nombre_cles} onChange={e => up('nombre_cles', e.target.value)}>{['0','1','2','3+'].map(n => <option key={n}>{n}</option>)}</select></div>
+          <div><label style={rs.label}>Couleur exterieure</label><select style={rs.input} value={form.couleur_ext} onChange={e => up('couleur_ext', e.target.value)}><option value="">—</option>{COULEURS_EXT.map(c => <option key={c}>{c}</option>)}</select></div>
+          <div><label style={rs.label}>Couleur interieure</label><select style={rs.input} value={form.couleur_int} onChange={e => up('couleur_int', e.target.value)}><option value="">—</option>{COULEURS_INT.map(c => <option key={c}>{c}</option>)}</select></div>
         </div>
       </div>
 
       {/* 3. OPTIONS */}
-      <div style={rs.card}><div style={rs.cardTitle}>3. Options du vehicule <span style={{ fontWeight: 400, color: 'var(--text-secondary)', fontSize: '0.8rem' }}>({form.options.length} selectionnees)</span></div>
+      <div style={rs.card}><div style={rs.cardTitle}>3. Equipements de votre vehicule <span style={{ fontWeight: 400, color: 'var(--text-secondary)', fontSize: '0.8rem' }}>({form.options.length} selectionnees)</span></div>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>Cochez les options presentes sur votre vehicule</p>
         {VEHICLE_OPTIONS.map(cat => (
           <div key={cat.cat} style={{ marginBottom: '0.75rem' }}>
             <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent-blue)', marginBottom: '0.4rem' }}>{cat.cat}</div>
@@ -1528,22 +1549,23 @@ function RepriseTab({ standalone, user }) {
       </div>
 
       {/* 4. ETAT */}
-      <div style={rs.card}><div style={rs.cardTitle}>4. Etat general</div>
+      <div style={rs.card}><div style={rs.cardTitle}>4. Comment decririez-vous l'etat de votre vehicule?</div>
         <div style={rs.etatBar}>{ETATS_GENERAL.map(e => <div key={e.value} style={rs.etatSeg(e.color, form.etat_general >= e.value)} onClick={() => up('etat_general', e.value)} data-testid={`reprise-etat-${e.value}`}>{e.label}</div>)}</div>
       </div>
-      <div style={rs.card}><div style={rs.cardTitle}>Pare-brise</div>
+      <div style={rs.card}><div style={rs.cardTitle}>Etat du pare-brise</div>
         <div>{ETATS_PAREBRISE.map(e => <span key={e} style={rs.chip(form.etat_parebrise === e)} onClick={() => up('etat_parebrise', e)}>{e}</span>)}</div>
       </div>
-      <div style={rs.card}><div style={rs.cardTitle}>Dommages carrosserie</div>
+      <div style={rs.card}><div style={rs.cardTitle}>Y a-t-il des dommages visibles?</div>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Selectionnez les zones concernees</p>
         <div>{ZONES_DOMMAGES.map(z => <span key={z} style={rs.dmgChip(form.dommages.includes(z))} onClick={() => togDmg(z)}>{form.dommages.includes(z) ? '✕ ' : ''}{z}</span>)}</div>
       </div>
-      <div style={rs.card}><div style={rs.cardTitle}>Etat mecanique</div>
-        <textarea style={{ ...rs.input, minHeight: '80px', resize: 'vertical' }} value={form.etat_mecanique} onChange={e => up('etat_mecanique', e.target.value)} placeholder="Bruits, problemes connus, entretien recent..." />
+      <div style={rs.card}><div style={rs.cardTitle}>Y a-t-il des problemes mecaniques?</div>
+        <textarea style={{ ...rs.input, minHeight: '80px', resize: 'vertical' }} value={form.etat_mecanique} onChange={e => up('etat_mecanique', e.target.value)} placeholder="Bruits, voyants allumes, entretien a faire..." />
       </div>
 
       {/* 5. PHOTOS */}
-      <div style={rs.card}><div style={rs.cardTitle}>5. Photos ({photos.length}/10)</div>
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>Exterieur (4 cotes), interieur, odometre, defauts</p>
+      <div style={rs.card}><div style={rs.cardTitle}>5. Photos de votre vehicule ({photos.length}/10)</div>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>Prenez des photos des 4 cotes, de l'interieur, du tableau de bord et de tout defaut visible</p>
         <input type="file" accept="image/*" multiple onChange={handlePhotos} style={{ display: 'none' }} id="reprise-photo-input" />
         <label htmlFor="reprise-photo-input" style={{ ...rs.btnSecondary, display: 'block', textAlign: 'center', cursor: 'pointer', padding: '1.5rem' }}>{uploading ? 'Envoi...' : 'Ajouter des photos'}</label>
         {photos.length > 0 && (
@@ -1555,15 +1577,15 @@ function RepriseTab({ standalone, user }) {
 
       {/* 6. GARANTIES */}
       <div style={rs.card}><div style={rs.cardTitle}>6. Garanties</div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.5rem' }}><input type="checkbox" checked={form.garantie_constructeur} onChange={e => up('garantie_constructeur', e.target.checked)} /> Garantie constructeur encore valide</label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.5rem' }}><input type="checkbox" checked={form.garantie_constructeur} onChange={e => up('garantie_constructeur', e.target.checked)} /> La garantie du fabricant est-elle encore valide?</label>
         {form.garantie_constructeur && <div style={{ marginBottom: '0.75rem' }}><label style={rs.label}>Date expiration</label><input style={rs.input} type="date" value={form.garantie_constructeur_date} onChange={e => up('garantie_constructeur_date', e.target.value)} /></div>}
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={form.garantie_prolongee} onChange={e => up('garantie_prolongee', e.target.checked)} /> Garantie prolongee</label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={form.garantie_prolongee} onChange={e => up('garantie_prolongee', e.target.checked)} /> Avez-vous une garantie prolongee?</label>
         {form.garantie_prolongee && <div style={{ marginTop: '0.5rem' }}><label style={rs.label}>Details</label><textarea style={{ ...rs.input, minHeight: '60px' }} value={form.garantie_prolongee_detail} onChange={e => up('garantie_prolongee_detail', e.target.value)} placeholder="Fournisseur, couverture..." /></div>}
       </div>
 
       {/* 7. NOTES */}
-      <div style={rs.card}><div style={rs.cardTitle}>7. Commentaires</div>
-        <textarea style={{ ...rs.input, minHeight: '120px', resize: 'vertical' }} value={form.commentaires} onChange={e => up('commentaires', e.target.value)} placeholder="Historique d'accidents, reparations, raison de vente..." data-testid="reprise-commentaires" />
+      <div style={rs.card}><div style={rs.cardTitle}>7. Autre chose a nous mentionner?</div>
+        <textarea style={{ ...rs.input, minHeight: '120px', resize: 'vertical' }} value={form.commentaires} onChange={e => up('commentaires', e.target.value)} placeholder="Accidents, reparations recentes, raison de la vente, ou tout autre detail important..." data-testid="reprise-commentaires" />
       </div>
 
       {/* SUBMIT */}
