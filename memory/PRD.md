@@ -18,6 +18,9 @@
 
 ### 3. kenbot-reprise (App Reprise) - V2 COMPLETE
 - **V2 LIVREE**: Design complet style Torque Management
+  - **Responsive**: Detection auto mobile/desktop
+    - Mobile: barre horizontale scrollable, formulaires 1 colonne, boutons Precedent/Suivant fixes en bas, cartes au lieu de tableau
+    - Desktop: sidebar fixe a gauche, grilles 2-3 colonnes, tableau evaluations
   - Sidebar navigation (Client, Vehicule, Options, Etat, Photos, Garanties, Notes)
   - Formulaire multi-sections avec dark theme professionnel
   - VIN auto-decode via API NHTSA
