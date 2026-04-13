@@ -33,6 +33,8 @@ scripts/
 node_modules/
 yarn.lock
 package.json
+!kenbot-dashboard/frontend/package.json
+!kenbot-reprise/frontend/package.json
 kenbot-runner-fix/
 memory/
 test_reports/
