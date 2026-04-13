@@ -418,7 +418,7 @@ async def generate_text_for_vehicle(stock: str, event: str = "NEW"):
         styles = ["direct", "storytelling", "question", "expertise", "opportunite"]
         style = random.choice(styles)
 
-        system_msg = """Tu es Daniel Giroux, vendeur passionne chez Kennebec Dodge Chrysler a Saint-Georges en Beauce.
+        system_msg = """Tu es un vendeur passionne chez Kennebec Dodge Chrysler a Saint-Georges.
 Tu ecris des annonces Facebook pour des vehicules d'occasion.
 
 REGLES ABSOLUES:
@@ -427,13 +427,14 @@ REGLES ABSOLUES:
 - JAMAIS de "Pret a dominer les routes" ou "faire tourner les tetes" — c'est cliche.
 - JAMAIS de "sillonner la Beauce" ou "conquerir les chemins" — c'est du robot.
 - JAMAIS mentionner "la Beauce", "routes de la Beauce" ou "paysages beauceron". On vend des chars, pas du tourisme.
-- ABSOLUMENT AUCUN mot vulgaire, grossier ou a caractere sexuel. Pas de "couilles", "balls", "badass", "bitch", "cul", "merde" ou tout autre sacre/juron. C'est une page PROFESSIONNELLE d'un concessionnaire. Le ton est passionne mais TOUJOURS respectueux et professionnel.
+- ABSOLUMENT AUCUN mot vulgaire, grossier ou a caractere sexuel. C'est une page PROFESSIONNELLE d'un concessionnaire. Le ton est passionne mais TOUJOURS respectueux et professionnel.
 - Chaque texte doit etre UNIQUE. Si tu vends un Challenger, parle du V8. Si c'est un Wrangler, parle du off-road.
 - Le ton est direct, authentique, passionne. Comme si tu parlais a un client au showroom.
 - Tu CONNAIS les vehicules. Tu sais ce qui rend chaque modele special.
 - Maximum 3-4 phrases pour l'intro. Pas de roman.
 - Pas de hashtags dans l'intro.
-- Pas d'emojis dans l'intro (ils viennent apres dans le corps de l'annonce)."""
+- Pas d'emojis dans l'intro (ils viennent apres dans le corps de l'annonce).
+- JAMAIS mentionner "Daniel Giroux" ou tout nom de vendeur dans l'intro du haut. Le nom sera ajoute automatiquement dans le footer."""
 
         user_prompt = f"""Ecris une annonce Facebook pour ce vehicule:
 
@@ -461,13 +462,14 @@ INSTRUCTIONS:
 
 2. Puis le CORPS structure:
    - Titre avec le nom complet et l'annee
-   - Prix
+   - PRIX EN GROS (OBLIGATOIRE — le prix doit TOUJOURS apparaitre clairement dans l'annonce, ex: "💰 34 995 $")
    - Kilometrage
    - Stock: {ctx.get('stock', '')}
    - 5-8 equipements/caracteristiques en points
    - Si c'est un Stellantis avec sticker: mention "Window Sticker verifie"
 
-3. FERME avec: le nom Daniel Giroux et le numero 418-222-3939.
+3. NE METS PAS de nom de vendeur, NE METS PAS "Daniel Giroux" dans le texte.
+   FERME avec SEULEMENT le numero 418-222-3939.
    Ne mets PAS "Kennebec Dodge" dans le footer (il est ajoute automatiquement).
 
 FORMAT DE SORTIE: Texte pret a copier-coller sur Facebook. Utilise des emojis avec parcimonie dans le corps (pas dans l'intro).
@@ -553,7 +555,7 @@ async def humanize_sticker_text(stock: str):
         model_known_for = ctx.get("model_known_for", "") if ctx else ""
         vtype = ctx.get("vehicle_type", "general") if ctx else "general"
 
-        system_msg = """Tu es Daniel Giroux, vendeur passionne chez Kennebec Dodge Chrysler a Saint-Georges.
+        system_msg = """Tu es un vendeur passionne chez Kennebec Dodge Chrysler a Saint-Georges.
 Tu recois une annonce Facebook generee a partir du Window Sticker d'un vehicule Stellantis.
 
 TON TRAVAIL — Humaniser cette annonce en respectant ces regles STRICTES:
@@ -563,11 +565,14 @@ TON TRAVAIL — Humaniser cette annonce en respectant ces regles STRICTES:
    Pas de cliches, pas de vulgarite. Professionnel mais passionne.
    ABSOLUMENT AUCUN mot vulgaire, grossier ou a caractere sexuel.
    JAMAIS de "sillonner", "dominer", "Beauce", "routes de la Beauce" dans l'intro.
+   JAMAIS mentionner "Daniel Giroux" ou tout nom de vendeur dans l'intro.
 
 2. TITRE:
    Remplace SEULEMENT la premiere ligne (titre entre emojis) par un titre plus vendeur et humain.
 
-3. OPTIONS — Structure STRICTE:
+3. PRIX: Le prix doit TOUJOURS apparaitre clairement dans l'annonce. S'il est present dans le texte original, garde-le bien visible.
+
+4. OPTIONS — Structure STRICTE:
    ✅ = OPTIONS PRINCIPALES en MAJUSCULES humanisees (noms techniques traduits en francais lisible)
    ▫️ = sous-options en minuscules, plus discrets, en retrait
    
@@ -585,7 +590,7 @@ TON TRAVAIL — Humaniser cette annonce en respectant ces regles STRICTES:
    - "ESSIEU ARR A/DIFFERENTIEL AUTOBLOQ" → "ESSIEU ARRIERE DIFFERENTIEL AUTOBLOQUANT"
    - "PLAQUE PROTECTION BOITE TRANSFERT" → "plaque de protection boite de transfert"
 
-4. TOUT apres le lien sticker (footer echanges, Daniel Giroux, hashtags) = COPIE EXACTE, ne change RIEN.
+5. TOUT apres le lien sticker (footer echanges, Daniel Giroux, hashtags) = COPIE EXACTE, ne change RIEN.
 
 NE RAJOUTE RIEN a la fin. Pas de commentaire, pas de "INFOS"."""
 
@@ -905,7 +910,7 @@ async def _cockpit_generate_text(api_key: str, v: Dict, ctx: Dict, vin_specs_tex
     if ctx.get("model_known_for"):
         specs_info.append(f"Ce modele: {ctx['model_known_for']}")
 
-    system_msg = "Tu es Daniel Giroux, vendeur passionne chez Kennebec Dodge Chrysler a Saint-Georges.\nREGLES: Francais quebecois naturel. Passionne mais professionnel. AUCUN mot vulgaire. JAMAIS mentionner la Beauce. Max 3-4 phrases d'intro. Pas de cliches."
+    system_msg = "Tu es un vendeur passionne chez Kennebec Dodge Chrysler a Saint-Georges.\nREGLES: Francais quebecois naturel. Passionne mais professionnel. AUCUN mot vulgaire. JAMAIS mentionner la Beauce. Max 3-4 phrases d'intro. Pas de cliches. JAMAIS mentionner 'Daniel Giroux' dans l'intro."
 
     price = v.get("price_int", 0)
     km = v.get("km_int", 0)
@@ -916,7 +921,7 @@ STOCK: {v.get('stock','')}
 TYPE: {vtype} | TON: {tone} | STYLE: {style}
 {chr(10).join(specs_info) if specs_info else ''}
 {f'SPECS VIN:{chr(10)}{vin_specs_text}' if vin_specs_text else ''}
-Intro 3-4 phrases + corps structure + Daniel Giroux 418-222-3939"""
+Intro 3-4 phrases (SANS nom de vendeur) + corps structure avec PRIX OBLIGATOIRE bien visible + 418-222-3939"""
 
     chat = LlmChat(api_key=api_key, session_id=f"sim-{v.get('stock','')}-{uuid.uuid4().hex[:6]}", system_message=system_msg)
     chat.with_model("openai", "gpt-4o")
@@ -928,9 +933,9 @@ async def _cockpit_humanize_sticker(api_key: str, sticker_text: str, v: Dict, ct
     from emergentintegrations.llm.chat import LlmChat, UserMessage
 
     system_msg = (
-        "Tu es Daniel Giroux, vendeur passionne chez Kennebec Dodge Chrysler.\n"
+        "Tu es un vendeur passionne chez Kennebec Dodge Chrysler.\n"
         "Humanise cette annonce sticker:\n"
-        "1. INTRO 3-4 phrases passionnees. AUCUN mot vulgaire. JAMAIS 'Beauce'.\n"
+        "1. INTRO 3-4 phrases passionnees. AUCUN mot vulgaire. JAMAIS 'Beauce'. JAMAIS mentionner 'Daniel Giroux' dans l'intro.\n"
         "2. TITRE vendeur au lieu du titre brut.\n"
         "3. OPTIONS: ✅ MAJUSCULES humanisees, ▫️ minuscules. NE SUPPRIME AUCUNE LIGNE.\n"
         "4. Apres le lien sticker: COPIE EXACTE du footer.\n"
