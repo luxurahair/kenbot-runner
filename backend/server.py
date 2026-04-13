@@ -1190,6 +1190,29 @@ async def reprise_decode_vin(vin: str):
     if not specs:
         from fastapi import HTTPException
         raise HTTPException(404, "VIN non trouve dans la base NHTSA")
+
+    # Enhanced trim detection via AI if NHTSA gives multiple trims
+    trim_val = specs.get("trim", "")
+    if trim_val and ("," in trim_val or "/" in trim_val or len(trim_val) > 30):
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage
+            api_key = os.environ.get("EMERGENT_LLM_KEY", "")
+            if api_key:
+                chat = LlmChat(
+                    api_key=api_key,
+                    session_id=f"vin-trim-{vin[-6:]}",
+                    system_message="Tu es un expert en decodage VIN automobile. Tu connais la structure des VINs par manufacturier (positions 4-8 = modele/moteur/trim). Reponds UNIQUEMENT avec le nom du trim exact, rien d'autre. Si tu n'es pas sur, donne ta meilleure estimation.",
+                )
+                chat.with_model("openai", "gpt-4o")
+                prompt = f"VIN: {vin}\nMarque: {specs.get('make','')}\nModele: {specs.get('model','')}\nAnnee: {specs.get('year','')}\nTrims possibles (NHTSA): {trim_val}\nMoteur: {specs.get('engine_cylinders','')}cyl {specs.get('engine_displacement','')}L\nCarburant: {specs.get('fuel_type','')}\n\nQuel est le trim EXACT de ce VIN? Analyse les caracteres 4-8 du VIN pour determiner le trim precis. IMPORTANT: Pour les vehicules vendus au Canada, utilise les noms canadiens (ex: VW Canada = Trendline/Comfortline/Highline au lieu de S/SE/SEL). Le VIN commence par 3VW = Mexique pour marche nord-americain."
+                ai_trim = await chat.send_message(UserMessage(text=prompt))
+                ai_trim = ai_trim.strip().strip('"').strip("'")
+                if ai_trim and len(ai_trim) < 50:
+                    specs["trim"] = ai_trim
+                    specs["trim_source"] = "ai_enhanced"
+        except Exception as e:
+            logging.warning(f"AI trim decode failed: {e}")
+
     return {"vin": vin, "specs": specs}
 
 
