@@ -82,7 +82,8 @@ function Header({ tab, setTab, status }) {
   return (
     <>
       <header className="header" data-testid="header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '28px', objectFit: 'contain' }} />
           <span className="header-logo" data-testid="header-logo">KENBOT</span>
           <span className={`status-dot ${connected ? '' : 'offline'}`} data-testid="status-dot" title={connected ? 'Supabase connecte' : 'Supabase deconnecte'} />
         </div>
@@ -1275,10 +1276,11 @@ function RepriseTab() {
   if (submitted) {
     return (
       <div style={{ textAlign: 'center', padding: '4rem 1rem' }}>
-        <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>✅</div>
+        <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '40px', marginBottom: '1.5rem', opacity: 0.8 }} />
+        <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>&#10003;</div>
         <h2 style={{ marginBottom: '0.5rem' }}>Demande envoyee!</h2>
-        <p style={{ color: 'var(--text-secondary)' }}>Merci {form.prenom}! Daniel Giroux va analyser votre vehicule.</p>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '1rem' }}>418-222-3939 — Kennebec Dodge Chrysler</p>
+        <p style={{ color: 'var(--text-secondary)' }}>Merci {form.prenom}! Notre equipe va analyser votre vehicule et vous contacter rapidement.</p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '1rem' }}>Kennebec Dodge Chrysler — 418-222-3939</p>
         <button style={{ ...rs.btnPrimary, marginTop: '1.5rem' }} onClick={() => window.location.reload()}>Nouvelle evaluation</button>
       </div>
     );
@@ -1287,7 +1289,10 @@ function RepriseTab() {
   return (
     <div style={{ padding: '0' }} data-testid="reprise-tab">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-        <h2 className="section-title">Nouvelle evaluation</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '24px', objectFit: 'contain', opacity: 0.7 }} />
+          <h2 className="section-title" style={{ margin: 0 }}>Evaluation de reprise</h2>
+        </div>
         <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{secIdx + 1}/{REPRISE_SECTIONS.length}</span>
       </div>
       <div style={rs.navBar} className="reprise-nav">
