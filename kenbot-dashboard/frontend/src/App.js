@@ -43,10 +43,12 @@ function App() {
     <div>
       <Header tab={tab} setTab={setTab} status={status} />
       <div className="main-content">
-        {loading ? <LoadingState /> : (
+        {loading && tab !== 'reprise' && tab !== 'evaluations' ? <LoadingState /> : (
           <>
             {tab === 'cockpit' && <CockpitTab inventory={inventory} status={status} />}
             {tab === 'compare' && <CompareTab />}
+            {tab === 'reprise' && <RepriseTab />}
+            {tab === 'evaluations' && <EvaluationsTab />}
             {tab === 'dashboard' && <DashboardTab status={status} events={events} posts={posts} />}
             {tab === 'inventory' && <InventoryTab inventory={inventory} />}
             {tab === 'posts' && <PostsTab posts={posts} />}
@@ -66,6 +68,8 @@ function Header({ tab, setTab, status }) {
   const tabs = [
     { id: 'cockpit', label: 'Cockpit' },
     { id: 'compare', label: 'Kennebec vs FB' },
+    { id: 'reprise', label: 'Reprise' },
+    { id: 'evaluations', label: 'Evaluations' },
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'inventory', label: 'Inventaire' },
     { id: 'posts', label: 'Posts FB' },
@@ -1150,6 +1154,381 @@ function CompareTab() {
       <div style={{ marginTop: '0.5rem', fontSize: '0.7rem', color: '#6b7280' }}>
         {filtered.length} véhicules affichés sur {vehicles.length} total — Auto-refresh 2 min
       </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════
+// REPRISE TAB — Vehicle Appraisal Form
+// ═══════════════════════════════════════════════════
+
+const REPRISE_SECTIONS = ['client', 'vehicle', 'options', 'etat', 'photos', 'garanties', 'notes'];
+const REPRISE_LABELS = { client: 'Client', vehicle: 'Vehicule', options: 'Options', etat: 'Etat', photos: 'Photos', garanties: 'Garanties', notes: 'Notes' };
+const TYPES_TRANSACTION = ['Achat', 'Echange', 'Location'];
+const INTERET_CLIENT = ['Neuf', 'Usage', 'Les deux'];
+const PROVENANCES = ['Walk-in', 'Telephone', 'Site web', 'Facebook', 'Messenger', 'Reference', 'Autre'];
+const ETATS_GENERAL = [
+  { label: 'Mauvais', color: '#ef4444', value: 1 },
+  { label: 'Faible', color: '#f97316', value: 2 },
+  { label: 'Moyen', color: '#eab308', value: 3 },
+  { label: 'Bon', color: '#84cc16', value: 4 },
+  { label: 'Excellent', color: '#22c55e', value: 5 },
+];
+const ETATS_PAREBRISE = ['Bon etat', 'Eclat mineur', 'Fissure', 'A remplacer'];
+const COULEURS_EXT = ['Blanc', 'Noir', 'Gris', 'Argent', 'Rouge', 'Bleu', 'Vert', 'Brun', 'Beige', 'Orange', 'Jaune', 'Autre'];
+const COULEURS_INT = ['Noir', 'Gris', 'Beige', 'Brun', 'Rouge', 'Autre'];
+const VEHICLE_OPTIONS = [
+  { cat: 'Confort', items: ['Sieges chauffants', 'Sieges ventiles', 'Sieges en cuir', 'Volant chauffant', 'Toit ouvrant / panoramique', 'Climatisation auto 2 zones', 'Demarreur a distance'] },
+  { cat: 'Technologie', items: ['Navigation GPS', 'Apple CarPlay', 'Android Auto', 'Camera de recul', 'Camera 360', 'Affichage tete haute', 'Chargeur sans fil', 'Audio premium'] },
+  { cat: 'Securite', items: ['Detection angle mort', 'Maintien de voie', 'Freinage d\'urgence auto', 'Regulateur adaptatif', 'Capteurs stationnement', 'Phares LED'] },
+  { cat: 'Performance', items: ['4x4 / AWD', 'Mode remorquage', 'Suspension adaptative', 'Turbo / Suralimente'] },
+  { cat: 'Exterieur', items: ['Marchepieds', 'Barres de toit', 'Attelage remorquage', 'Roues alliage 18+', 'Vitres teintees'] },
+];
+const ZONES_DOMMAGES = ['Pare-chocs avant', 'Aile avant G', 'Aile avant D', 'Portiere avant G', 'Portiere avant D', 'Portiere arriere G', 'Portiere arriere D', 'Aile arriere G', 'Aile arriere D', 'Pare-chocs arriere', 'Toit', 'Capot', 'Coffre/Hayon'];
+
+function RepriseTab() {
+  const [sec, setSec] = useState('client');
+  const [vinSpecs, setVinSpecs] = useState(null);
+  const [vinLoading, setVinLoading] = useState(false);
+  const [vinError, setVinError] = useState('');
+  const [photos, setPhotos] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [evalId] = useState(() => Math.random().toString(36).slice(2));
+  const [form, setForm] = useState({
+    prenom: '', nom: '', telephone: '', courriel: '',
+    type_transaction: '', solde_du: false, solde_montant: '', interet: '', provenance: '', notes_client: '',
+    vin: '', km: '', couleur_ext: '', couleur_int: '', nombre_cles: '2',
+    options: [], etat_general: 3, etat_parebrise: 'Bon etat', etat_mecanique: '', dommages: [],
+    garantie_constructeur: false, garantie_constructeur_date: '', garantie_prolongee: false, garantie_prolongee_detail: '',
+    commentaires: '',
+  });
+  const up = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const togOpt = o => setForm(f => ({ ...f, options: f.options.includes(o) ? f.options.filter(x => x !== o) : [...f.options, o] }));
+  const togDmg = z => setForm(f => ({ ...f, dommages: f.dommages.includes(z) ? f.dommages.filter(x => x !== z) : [...f.dommages, z] }));
+  const secIdx = REPRISE_SECTIONS.indexOf(sec);
+  const goNext = () => { if (secIdx < REPRISE_SECTIONS.length - 1) setSec(REPRISE_SECTIONS[secIdx + 1]); };
+  const goPrev = () => { if (secIdx > 0) setSec(REPRISE_SECTIONS[secIdx - 1]); };
+
+  const decodeVin = async () => {
+    const v = form.vin.trim().toUpperCase();
+    if (v.length !== 17) { setVinError('VIN: 17 caracteres'); return; }
+    setVinLoading(true); setVinError('');
+    try {
+      const r = await fetch(`${API}/api/vin/${v}`);
+      if (!r.ok) throw new Error('VIN non trouve');
+      setVinSpecs((await r.json()).specs);
+    } catch (e) { setVinError(e.message); }
+    setVinLoading(false);
+  };
+
+  const handlePhotos = async (e) => {
+    const files = Array.from(e.target.files).slice(0, 10 - photos.length);
+    if (!files.length) return;
+    setUploading(true);
+    for (const file of files) {
+      const fd = new FormData(); fd.append('file', file); fd.append('evaluation_id', evalId);
+      try {
+        const r = await fetch(`${API}/api/evaluations/upload-photo`, { method: 'POST', body: fd });
+        if (r.ok) { const d = await r.json(); setPhotos(p => [...p, { url: d.url, name: file.name }]); }
+      } catch (err) { console.error(err); }
+    }
+    setUploading(false);
+  };
+
+  const handleSubmit = async () => {
+    if (!form.prenom || !form.nom || !form.telephone) return;
+    setSubmitting(true);
+    try {
+      const payload = { ...form, vin: form.vin.trim().toUpperCase(), photos: photos.map(p => p.url),
+        km: form.km ? parseInt(form.km.replace(/\D/g, '')) : null,
+        paiement_restant: form.solde_montant ? parseFloat(form.solde_montant.replace(/\D/g, '')) : null,
+        etat_general: ETATS_GENERAL.find(e => e.value === form.etat_general)?.label || '',
+      };
+      const r = await fetch(`${API}/api/evaluations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (r.ok) setSubmitted(true);
+    } catch (e) { console.error(e); }
+    setSubmitting(false);
+  };
+
+  const canSubmit = form.prenom && form.nom && form.telephone;
+
+  const rs = { // reprise styles
+    card: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1.25rem', marginBottom: '1rem' },
+    cardTitle: { fontFamily: 'Chivo', fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.75rem' },
+    row: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' },
+    label: { display: 'block', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' },
+    input: { width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.9rem', fontFamily: 'IBM Plex Sans', background: 'var(--surface)' },
+    chip: (on) => ({ display: 'inline-block', padding: '8px 14px', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', border: on ? '2px solid var(--accent-blue)' : '1px solid var(--border)', background: on ? 'var(--accent-blue-subtle)' : 'var(--surface)', color: on ? 'var(--accent-blue)' : 'var(--text-secondary)', margin: '3px' }),
+    dmgChip: (on) => ({ display: 'inline-block', padding: '6px 12px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', border: on ? '2px solid var(--accent-red)' : '1px solid var(--border)', background: on ? 'var(--accent-red-subtle)' : 'var(--surface)', color: on ? 'var(--accent-red)' : 'var(--text-secondary)', margin: '3px' }),
+    etatBar: { display: 'flex', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border)' },
+    etatSeg: (c, on) => ({ flex: 1, padding: '10px 0', textAlign: 'center', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 700, background: on ? c : 'var(--surface)', color: on ? '#fff' : 'var(--text-secondary)', transition: 'all 0.15s' }),
+    navBar: { display: 'flex', gap: '0', overflowX: 'auto', borderBottom: '2px solid var(--border)', marginBottom: '1.25rem' },
+    navBtn: (on) => ({ padding: '10px 16px', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', border: 'none', borderBottom: on ? '2px solid var(--accent-blue)' : '2px solid transparent', background: 'none', color: on ? 'var(--accent-blue)' : 'var(--text-secondary)', whiteSpace: 'nowrap', fontFamily: 'IBM Plex Sans' }),
+    bottomBar: { display: 'flex', gap: '0.5rem', marginTop: '1.5rem', justifyContent: 'flex-end' },
+    btnPrimary: { padding: '10px 24px', borderRadius: '6px', border: 'none', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', background: 'var(--accent-blue)', color: '#fff' },
+    btnSecondary: { padding: '10px 20px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', background: 'var(--surface)', color: 'var(--text-secondary)' },
+  };
+
+  if (submitted) {
+    return (
+      <div style={{ textAlign: 'center', padding: '4rem 1rem' }}>
+        <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>✅</div>
+        <h2 style={{ marginBottom: '0.5rem' }}>Demande envoyee!</h2>
+        <p style={{ color: 'var(--text-secondary)' }}>Merci {form.prenom}! Daniel Giroux va analyser votre vehicule.</p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '1rem' }}>418-222-3939 — Kennebec Dodge Chrysler</p>
+        <button style={{ ...rs.btnPrimary, marginTop: '1.5rem' }} onClick={() => window.location.reload()}>Nouvelle evaluation</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '0' }} data-testid="reprise-tab">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <h2 className="section-title">Nouvelle evaluation</h2>
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{secIdx + 1}/{REPRISE_SECTIONS.length}</span>
+      </div>
+      <div style={rs.navBar} className="reprise-nav">
+        {REPRISE_SECTIONS.map((s, i) => (
+          <button key={s} style={rs.navBtn(sec === s)} onClick={() => setSec(s)} data-testid={`reprise-nav-${s}`}>
+            {i < secIdx ? '✓ ' : ''}{REPRISE_LABELS[s]}
+          </button>
+        ))}
+      </div>
+
+      {sec === 'client' && (
+        <>
+          <div style={rs.card}><div style={rs.cardTitle}>Informations du client</div>
+            <div style={rs.row}>
+              <div><label style={rs.label}>Prenom *</label><input style={rs.input} value={form.prenom} onChange={e => up('prenom', e.target.value)} data-testid="reprise-prenom" /></div>
+              <div><label style={rs.label}>Nom *</label><input style={rs.input} value={form.nom} onChange={e => up('nom', e.target.value)} data-testid="reprise-nom" /></div>
+            </div>
+            <div style={{ ...rs.row, marginTop: '0.75rem' }}>
+              <div><label style={rs.label}>Telephone *</label><input style={rs.input} type="tel" value={form.telephone} onChange={e => up('telephone', e.target.value)} data-testid="reprise-tel" /></div>
+              <div><label style={rs.label}>Courriel</label><input style={rs.input} type="email" value={form.courriel} onChange={e => up('courriel', e.target.value)} /></div>
+            </div>
+          </div>
+          <div style={rs.card}><div style={rs.cardTitle}>Transaction</div>
+            <div style={rs.row}>
+              <div><label style={rs.label}>Type</label><select style={rs.input} value={form.type_transaction} onChange={e => up('type_transaction', e.target.value)}><option value="">—</option>{TYPES_TRANSACTION.map(t => <option key={t}>{t}</option>)}</select></div>
+              <div><label style={rs.label}>Interet</label><select style={rs.input} value={form.interet} onChange={e => up('interet', e.target.value)}><option value="">—</option>{INTERET_CLIENT.map(t => <option key={t}>{t}</option>)}</select></div>
+              <div><label style={rs.label}>Provenance</label><select style={rs.input} value={form.provenance} onChange={e => up('provenance', e.target.value)}><option value="">—</option>{PROVENANCES.map(p => <option key={p}>{p}</option>)}</select></div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {sec === 'vehicle' && (
+        <>
+          <div style={rs.card}><div style={rs.cardTitle}>Identification par VIN</div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <input style={{ ...rs.input, flex: 1, minWidth: '200px', fontFamily: 'IBM Plex Mono', textTransform: 'uppercase' }} value={form.vin} onChange={e => { up('vin', e.target.value.toUpperCase().slice(0, 17)); setVinError(''); }} maxLength={17} placeholder="17 caracteres" data-testid="reprise-vin" />
+              <button style={rs.btnPrimary} onClick={decodeVin} disabled={vinLoading} data-testid="reprise-decode">{vinLoading ? '...' : 'Decoder'}</button>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '4px' }}>{form.vin.length}/17</div>
+            {vinError && <div style={{ color: 'var(--accent-red)', fontSize: '0.8rem', marginTop: '0.5rem' }}>{vinError}</div>}
+          </div>
+          {vinSpecs && (
+            <div style={rs.card}><div style={rs.cardTitle}>Vehicule identifie</div>
+              <div style={rs.row}>
+                {[['Marque', vinSpecs.make], ['Modele', vinSpecs.model], ['Annee', vinSpecs.year], ['Trim', vinSpecs.trim], ['Moteur', `${vinSpecs.engine_cylinders||''}cyl ${vinSpecs.engine_displacement||''}L ${vinSpecs.engine_hp||''}HP`.trim()], ['Motricite', vinSpecs.drive_type]].filter(([,v]) => v && v !== 'cyl LHP').map(([l,v]) => (
+                  <div key={l} style={{ padding: '6px 0', borderBottom: '1px solid var(--border)' }}><span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{l}</span><br/><span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{v}</span></div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div style={rs.card}><div style={rs.cardTitle}>Details</div>
+            <div style={rs.row}>
+              <div><label style={rs.label}>Kilometrage</label><input style={rs.input} value={form.km} onChange={e => up('km', e.target.value)} data-testid="reprise-km" /></div>
+              <div><label style={rs.label}>Cles</label><select style={rs.input} value={form.nombre_cles} onChange={e => up('nombre_cles', e.target.value)}>{['0','1','2','3+'].map(n => <option key={n}>{n}</option>)}</select></div>
+              <div><label style={rs.label}>Couleur ext.</label><select style={rs.input} value={form.couleur_ext} onChange={e => up('couleur_ext', e.target.value)}><option value="">—</option>{COULEURS_EXT.map(c => <option key={c}>{c}</option>)}</select></div>
+              <div><label style={rs.label}>Couleur int.</label><select style={rs.input} value={form.couleur_int} onChange={e => up('couleur_int', e.target.value)}><option value="">—</option>{COULEURS_INT.map(c => <option key={c}>{c}</option>)}</select></div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {sec === 'options' && (
+        <>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>{form.options.length} option{form.options.length !== 1 ? 's' : ''}</p>
+          {VEHICLE_OPTIONS.map(cat => (
+            <div key={cat.cat} style={rs.card}><div style={rs.cardTitle}>{cat.cat}</div>
+              <div>{cat.items.map(o => <span key={o} style={rs.chip(form.options.includes(o))} onClick={() => togOpt(o)}>{form.options.includes(o) ? '✓ ' : ''}{o}</span>)}</div>
+            </div>
+          ))}
+        </>
+      )}
+
+      {sec === 'etat' && (
+        <>
+          <div style={rs.card}><div style={rs.cardTitle}>Etat general</div>
+            <div style={rs.etatBar}>{ETATS_GENERAL.map(e => <div key={e.value} style={rs.etatSeg(e.color, form.etat_general >= e.value)} onClick={() => up('etat_general', e.value)} data-testid={`reprise-etat-${e.value}`}>{e.label}</div>)}</div>
+          </div>
+          <div style={rs.card}><div style={rs.cardTitle}>Pare-brise</div>
+            <div>{ETATS_PAREBRISE.map(e => <span key={e} style={rs.chip(form.etat_parebrise === e)} onClick={() => up('etat_parebrise', e)}>{e}</span>)}</div>
+          </div>
+          <div style={rs.card}><div style={rs.cardTitle}>Dommages carrosserie</div>
+            <div>{ZONES_DOMMAGES.map(z => <span key={z} style={rs.dmgChip(form.dommages.includes(z))} onClick={() => togDmg(z)}>{form.dommages.includes(z) ? '✕ ' : ''}{z}</span>)}</div>
+          </div>
+          <div style={rs.card}><div style={rs.cardTitle}>Mecanique</div>
+            <textarea style={{ ...rs.input, minHeight: '80px', resize: 'vertical' }} value={form.etat_mecanique} onChange={e => up('etat_mecanique', e.target.value)} placeholder="Bruits, problemes connus..." />
+          </div>
+        </>
+      )}
+
+      {sec === 'photos' && (
+        <div style={rs.card}><div style={rs.cardTitle}>Photos ({photos.length}/10)</div>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>Exterieur, interieur, odometre, defauts</p>
+          <input type="file" accept="image/*" multiple onChange={handlePhotos} style={{ display: 'none' }} id="reprise-photo-input" />
+          <label htmlFor="reprise-photo-input" style={{ ...rs.btnSecondary, display: 'block', textAlign: 'center', cursor: 'pointer', padding: '1.5rem' }}>{uploading ? 'Envoi...' : 'Ajouter des photos'}</label>
+          {photos.length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '0.5rem', marginTop: '0.75rem' }}>
+              {photos.map((p, i) => <div key={i} style={{ position: 'relative' }}><img src={p.url} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--border)' }} /><button onClick={() => setPhotos(pr => pr.filter((_, j) => j !== i))} style={{ position: 'absolute', top: 2, right: 2, background: 'var(--accent-red)', color: '#fff', border: 'none', borderRadius: '50%', width: 20, height: 20, fontSize: '0.6rem', cursor: 'pointer' }}>✕</button></div>)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {sec === 'garanties' && (
+        <>
+          <div style={rs.card}><div style={rs.cardTitle}>Garantie constructeur</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={form.garantie_constructeur} onChange={e => up('garantie_constructeur', e.target.checked)} /> Encore valide</label>
+            {form.garantie_constructeur && <div style={{ marginTop: '0.5rem' }}><label style={rs.label}>Date expiration</label><input style={rs.input} type="date" value={form.garantie_constructeur_date} onChange={e => up('garantie_constructeur_date', e.target.value)} /></div>}
+          </div>
+          <div style={rs.card}><div style={rs.cardTitle}>Garantie prolongee</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={form.garantie_prolongee} onChange={e => up('garantie_prolongee', e.target.checked)} /> Oui</label>
+            {form.garantie_prolongee && <div style={{ marginTop: '0.5rem' }}><label style={rs.label}>Details</label><textarea style={{ ...rs.input, minHeight: '60px' }} value={form.garantie_prolongee_detail} onChange={e => up('garantie_prolongee_detail', e.target.value)} placeholder="Fournisseur, couverture..." /></div>}
+          </div>
+        </>
+      )}
+
+      {sec === 'notes' && (
+        <div style={rs.card}><div style={rs.cardTitle}>Commentaires</div>
+          <textarea style={{ ...rs.input, minHeight: '150px', resize: 'vertical' }} value={form.commentaires} onChange={e => up('commentaires', e.target.value)} placeholder="Historique, reparations, raison de vente..." data-testid="reprise-commentaires" />
+        </div>
+      )}
+
+      <div style={rs.bottomBar}>
+        {secIdx > 0 && <button style={rs.btnSecondary} onClick={goPrev}>Precedent</button>}
+        {secIdx < REPRISE_SECTIONS.length - 1 ? (
+          <button style={rs.btnPrimary} onClick={goNext}>Suivant</button>
+        ) : (
+          <button style={{ ...rs.btnPrimary, opacity: canSubmit && !submitting ? 1 : 0.5 }} onClick={handleSubmit} disabled={!canSubmit || submitting} data-testid="reprise-submit">
+            {submitting ? 'Envoi...' : 'Envoyer'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+// EVALUATIONS TAB — Admin list + detail
+// ═══════════════════════════════════════════════════
+
+const EVAL_STATUTS = ['NOUVEAU', 'EN EVALUATION', 'OFFRE ENVOYEE', 'ACCEPTE', 'REFUSE'];
+const EVAL_COLORS = { 'NOUVEAU': '#3b82f6', 'EN EVALUATION': '#eab308', 'OFFRE ENVOYEE': '#a855f7', 'ACCEPTE': '#22c55e', 'REFUSE': '#ef4444' };
+
+function EvaluationsTab() {
+  const [evals, setEvals] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const fetchEvals = useCallback(async () => {
+    setLoading(true);
+    try { const r = await fetch(`${API}/api/evaluations`); const d = await r.json(); setEvals(d.evaluations || []); } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { fetchEvals(); }, [fetchEvals]);
+
+  const updateStatus = async (id, st) => {
+    await fetch(`${API}/api/evaluations/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: st }) });
+    fetchEvals();
+    if (selected?.id === id) setSelected(p => ({ ...p, status: st }));
+  };
+
+  const filtered = evals.filter(e => filter === 'all' || e.status === filter).filter(e => {
+    if (!search) return true;
+    const s = search.toLowerCase();
+    return (e.client_name||'').toLowerCase().includes(s) || (e.vin||'').toLowerCase().includes(s) || (e.make||'').toLowerCase().includes(s) || (e.model||'').toLowerCase().includes(s);
+  });
+
+  const evalBadge = (st) => {
+    const c = EVAL_COLORS[st] || '#6b7280';
+    return <span style={{ padding: '2px 10px', borderRadius: '10px', fontSize: '0.7rem', fontWeight: 700, background: `${c}20`, color: c, border: `1px solid ${c}40` }}>{st}</span>;
+  };
+
+  if (selected) {
+    const ev = selected;
+    const fd = ev.form_data || {};
+    return (
+      <div data-testid="eval-detail">
+        <button onClick={() => setSelected(null)} style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 14px', cursor: 'pointer', background: 'var(--surface)', fontSize: '0.8rem', marginBottom: '1rem' }}>← Retour</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h3 style={{ fontFamily: 'Chivo', fontWeight: 700 }}>{ev.year} {ev.make} {ev.model} {ev.trim}</h3>
+          {evalBadge(ev.status)}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+          {[['VIN', ev.vin], ['Moteur', ev.engine], ['Motricite', ev.drive_type], ['Km', ev.km ? `${Number(ev.km).toLocaleString('fr-CA')} km` : null], ['Etat', ev.etat_general], ['Couleur ext.', fd.couleur_ext]].filter(([,v]) => v).map(([l,v]) => (
+            <div key={l} style={{ background: 'var(--surface-secondary)', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)' }}><div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>{l}</div><div style={{ fontWeight: 600, fontSize: '0.9rem', marginTop: '2px', wordBreak: 'break-all' }}>{v}</div></div>
+          ))}
+        </div>
+        {fd.options?.length > 0 && <div style={{ marginBottom: '1rem' }}><strong style={{ fontSize: '0.8rem' }}>Options ({fd.options.length}):</strong><div style={{ marginTop: '0.5rem' }}>{fd.options.map(o => <span key={o} style={{ display: 'inline-block', padding: '3px 10px', margin: '2px', borderRadius: '4px', fontSize: '0.75rem', background: 'var(--accent-blue-subtle)', color: 'var(--accent-blue)', border: '1px solid var(--accent-blue)' }}>{o}</span>)}</div></div>}
+        {ev.photos?.length > 0 && <div style={{ marginBottom: '1rem' }}><strong style={{ fontSize: '0.8rem' }}>Photos ({ev.photos.length}):</strong><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '0.5rem', marginTop: '0.5rem' }}>{ev.photos.map((u,i) => <img key={i} src={u} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => window.open(u)} />)}</div></div>}
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
+          <strong style={{ fontSize: '0.85rem' }}>Client</strong>
+          <div style={{ marginTop: '0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>{ev.client_name}</div>
+          <div style={{ color: 'var(--accent-blue)', fontSize: '0.85rem' }}><a href={`tel:${ev.client_phone}`} style={{ color: 'inherit' }}>{ev.client_phone}</a></div>
+          {ev.client_email && <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{ev.client_email}</div>}
+        </div>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem' }}>
+          <strong style={{ fontSize: '0.85rem' }}>Changer le statut</strong>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.75rem' }}>
+            {EVAL_STATUTS.map(st => <button key={st} onClick={() => updateStatus(ev.id, st)} style={{ padding: '6px 14px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', border: ev.status === st ? `2px solid ${EVAL_COLORS[st]}` : '1px solid var(--border)', background: ev.status === st ? `${EVAL_COLORS[st]}20` : 'var(--surface)', color: EVAL_COLORS[st] || 'var(--text-secondary)' }} data-testid={`eval-status-${st}`}>{st}</button>)}
+          </div>
+        </div>
+        <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '1rem' }}>Recu le {new Date(ev.created_at).toLocaleString('fr-CA')}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div data-testid="evaluations-tab">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
+        <h2 className="section-title" style={{ margin: 0 }}>Evaluations</h2>
+        <button onClick={fetchEvals} disabled={loading} style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 14px', cursor: 'pointer', background: 'var(--surface)', fontSize: '0.8rem' }} data-testid="eval-refresh">{loading ? '...' : 'Rafraichir'}</button>
+      </div>
+      <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+        {[{ l: 'Toutes', id: 'all', c: evals.length }, ...EVAL_STATUTS.map(s => ({ l: s, id: s, c: evals.filter(e => e.status === s).length }))].map(f => (
+          <button key={f.id} onClick={() => setFilter(f.id)} style={{ padding: '4px 12px', borderRadius: '12px', border: 'none', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, background: filter === f.id ? 'var(--accent-blue)' : 'var(--surface-secondary)', color: filter === f.id ? '#fff' : 'var(--text-secondary)' }} data-testid={`eval-filter-${f.id}`}>{f.l} ({f.c})</button>
+        ))}
+      </div>
+      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher VIN, client..." style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', marginBottom: '1rem', fontFamily: 'IBM Plex Sans' }} data-testid="eval-search" />
+      {filtered.length === 0 ? (
+        <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem' }}>{evals.length === 0 ? 'Aucune evaluation' : 'Aucun resultat'}</div>
+      ) : (
+        <div className="eval-list">
+          {filtered.map(ev => (
+            <div key={ev.id} onClick={() => setSelected(ev)} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem', marginBottom: '0.5rem', cursor: 'pointer' }} className="eval-card" data-testid={`eval-card-${ev.id}`}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.4rem' }}>
+                <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{ev.year} {ev.make} {ev.model} {ev.trim}</div>
+                {evalBadge(ev.status)}
+              </div>
+              <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem', color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
+                <span>{ev.client_name}</span>
+                <span>{ev.client_phone}</span>
+                {ev.km && <span>{Number(ev.km).toLocaleString('fr-CA')} km</span>}
+                <span>{new Date(ev.created_at).toLocaleDateString('fr-CA', { month: 'short', day: 'numeric' })}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

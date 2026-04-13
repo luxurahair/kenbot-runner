@@ -1085,3 +1085,36 @@ tr:hover td { background: var(--surface-secondary); }
   align-items: center;
   justify-content: center;
 }
+
+
+/* ═══ RESPONSIVE ═══ */
+@media (max-width: 768px) {
+  .header { flex-wrap: wrap; height: auto; padding: 0.5rem 1rem; gap: 0; }
+  .header-logo { font-size: 1rem; }
+  .header-nav { width: 100%; overflow-x: auto; -ms-overflow-style: none; scrollbar-width: none; order: 3; }
+  .header-nav::-webkit-scrollbar { display: none; }
+  .header-nav button { font-size: 0.65rem; padding: 0 0.75rem; height: 40px; white-space: nowrap; flex-shrink: 0; }
+  .header-right { margin-left: auto; }
+  .main-content { padding: 0.75rem !important; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 0.5rem !important; }
+  .bento-grid { grid-template-columns: 1fr !important; }
+  .section-title { font-size: 1rem !important; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table-wrap table { min-width: 600px; }
+  .card { padding: 1rem !important; }
+  .tp-layout { flex-direction: column !important; }
+  .tp-sidebar { width: 100% !important; max-height: 200px !important; }
+  .tp-preview { width: 100% !important; }
+  .ck-stats-row { flex-wrap: wrap; }
+  .ck-stat { min-width: 45%; }
+  .ck-sim-header { flex-direction: column; }
+  .ck-sim-controls { flex-wrap: wrap; }
+}
+
+/* ═══ REPRISE NAV ═══ */
+.reprise-nav { -ms-overflow-style: none; scrollbar-width: none; }
+.reprise-nav::-webkit-scrollbar { display: none; }
+
+/* ═══ EVAL CARDS ═══ */
+.eval-card { transition: border-color 0.15s; }
+.eval-card:hover { border-color: var(--accent-blue) !important; }
