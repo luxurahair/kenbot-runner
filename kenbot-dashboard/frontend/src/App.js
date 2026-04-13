@@ -1483,7 +1483,7 @@ function RepriseTab({ standalone, user }) {
         <div style={rs.row}>
           <div><label style={rs.label}>Vous desirez</label><select style={rs.input} value={form.type_transaction} onChange={e => up('type_transaction', e.target.value)}><option value="">—</option>{TYPES_TRANSACTION.map(t => <option key={t}>{t}</option>)}</select></div>
           <div><label style={rs.label}>Vous recherchez</label><select style={rs.input} value={form.interet} onChange={e => up('interet', e.target.value)}><option value="">—</option>{INTERET_CLIENT.map(t => <option key={t}>{t}</option>)}</select></div>
-          <div><label style={rs.label}>Comment nous avez-vous connu?</label><select style={rs.input} value={form.provenance} onChange={e => up('provenance', e.target.value)}><option value="">—</option>{PROVENANCES.map(p => <option key={p}>{p}</option>)}</select></div>
+          <div><label style={rs.label}>Comment vous nous avez connu?</label><select style={rs.input} value={form.provenance} onChange={e => up('provenance', e.target.value)}><option value="">—</option>{PROVENANCES.map(p => <option key={p}>{p}</option>)}</select></div>
         </div>
       </div>
       <div style={rs.card}><div style={rs.cardTitle}>Votre financement actuel</div>
