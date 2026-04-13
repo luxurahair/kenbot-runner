@@ -1,10 +1,141 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './App.css';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
+// Role-based tab access
+const ROLE_TABS = {
+  admin: ['cockpit', 'compare', 'reprise', 'evaluations', 'dashboard', 'inventory', 'posts', 'textpreview', 'events', 'architecture', 'changelog'],
+  directeur: ['evaluations', 'reprise', 'inventory'],
+  conseiller: ['reprise', 'evaluations'],
+};
+
 function App() {
-  const [tab, setTab] = useState('cockpit');
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/reprise" element={<StandaloneReprise />} />
+        <Route path="/*" element={<DashboardApp />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+// STANDALONE REPRISE PAGE — for clients
+// ═══════════════════════════════════════════════════
+function StandaloneReprise() {
+  return (
+    <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
+      <header style={{ background: '#09090b', borderBottom: '1px solid #27272a', padding: '1rem 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem' }}>
+        <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '32px', objectFit: 'contain' }} />
+        <span style={{ fontFamily: 'Chivo', fontWeight: 900, fontSize: '1rem', color: '#0ea5e9', letterSpacing: '0.1em' }}>REPRISE</span>
+      </header>
+      <div style={{ maxWidth: '800px', margin: '0 auto', padding: '1.5rem' }}>
+        <RepriseTab standalone />
+      </div>
+      <div style={{ textAlign: 'center', padding: '2rem 1rem', color: '#52525b', fontSize: '0.75rem' }}>
+        Kennebec Dodge Chrysler — 10240 boul. Lacroix, Saint-Georges — 418-222-3939
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+// DASHBOARD LOGIN
+// ═══════════════════════════════════════════════════
+function LoginPage({ onLogin }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async () => {
+    setError(''); setLoading(true);
+    try {
+      const res = await fetch(`${API}/api/reprise/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        onLogin({ name: data.name, role: data.role, username: data.username });
+      } else {
+        setError('Identifiants incorrects');
+      }
+    } catch { setError('Erreur de connexion'); }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '2rem', width: '100%', maxWidth: '360px' }} data-testid="login-form">
+        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+          <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '36px', marginBottom: '1rem', opacity: 0.8 }} />
+          <div style={{ fontFamily: 'Chivo', fontWeight: 900, fontSize: '1.25rem', color: '#0ea5e9', letterSpacing: '0.15em' }}>KENBOT</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Connexion au tableau de bord</div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <input
+            data-testid="login-username"
+            style={{ width: '100%', padding: '12px 14px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.9rem', fontFamily: 'IBM Plex Sans' }}
+            placeholder="Nom d'utilisateur"
+            value={username}
+            onChange={e => setUsername(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleLogin()}
+          />
+          <input
+            data-testid="login-password"
+            type="password"
+            style={{ width: '100%', padding: '12px 14px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.9rem', fontFamily: 'IBM Plex Sans' }}
+            placeholder="Mot de passe"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleLogin()}
+          />
+          {error && <div style={{ color: 'var(--accent-red)', fontSize: '0.8rem' }} data-testid="login-error">{error}</div>}
+          <button
+            data-testid="login-btn"
+            onClick={handleLogin}
+            disabled={loading}
+            style={{ width: '100%', padding: '12px', borderRadius: '6px', border: 'none', background: '#0ea5e9', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', fontFamily: 'IBM Plex Sans' }}
+          >
+            {loading ? '...' : 'Connexion'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+// DASHBOARD APP (with auth)
+// ═══════════════════════════════════════════════════
+function DashboardApp() {
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem('kenbot_user')); } catch { return null; }
+  });
+
+  const handleLogin = (u) => {
+    setUser(u);
+    sessionStorage.setItem('kenbot_user', JSON.stringify(u));
+  };
+  const handleLogout = () => {
+    setUser(null);
+    sessionStorage.removeItem('kenbot_user');
+  };
+
+  if (!user) return <LoginPage onLogin={handleLogin} />;
+
+  const allowedTabs = ROLE_TABS[user.role] || ROLE_TABS.conseiller;
+  return <Dashboard user={user} allowedTabs={allowedTabs} onLogout={handleLogout} />;
+}
+
+function Dashboard({ user, allowedTabs, onLogout }) {
+  const defaultTab = allowedTabs[0] || 'evaluations';
+  const [tab, setTab] = useState(defaultTab);
   const [status, setStatus] = useState(null);
   const [inventory, setInventory] = useState([]);
   const [posts, setPosts] = useState([]);
@@ -41,7 +172,7 @@ function App() {
 
   return (
     <div>
-      <Header tab={tab} setTab={setTab} status={status} />
+      <Header tab={tab} setTab={setTab} status={status} allowedTabs={allowedTabs} user={user} onLogout={onLogout} />
       <div className="main-content">
         {loading && tab !== 'reprise' && tab !== 'evaluations' ? <LoadingState /> : (
           <>
@@ -63,9 +194,9 @@ function App() {
   );
 }
 
-function Header({ tab, setTab, status }) {
+function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
   const [showRunPanel, setShowRunPanel] = useState(false);
-  const tabs = [
+  const allTabs = [
     { id: 'cockpit', label: 'Cockpit' },
     { id: 'compare', label: 'Kennebec vs FB' },
     { id: 'reprise', label: 'Reprise' },
@@ -78,6 +209,7 @@ function Header({ tab, setTab, status }) {
     { id: 'architecture', label: 'Architecture' },
     { id: 'changelog', label: 'Changelog' },
   ];
+  const tabs = allTabs.filter(t => allowedTabs.includes(t.id));
   const connected = status?.supabase_connected;
   return (
     <>
@@ -95,8 +227,14 @@ function Header({ tab, setTab, status }) {
           ))}
         </nav>
         <div className="header-right">
-          <button className="run-btn" onClick={() => setShowRunPanel(!showRunPanel)} data-testid="run-cron-btn">
-            RUN CRON
+          {user?.role === 'admin' && (
+            <button className="run-btn" onClick={() => setShowRunPanel(!showRunPanel)} data-testid="run-cron-btn">
+              RUN CRON
+            </button>
+          )}
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontFamily: 'IBM Plex Mono' }} data-testid="user-name">{user?.name}</span>
+          <button onClick={onLogout} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', padding: '4px 10px', fontSize: '0.7rem', color: 'var(--text-secondary)', cursor: 'pointer', fontFamily: 'IBM Plex Sans' }} data-testid="logout-btn">
+            Deconnexion
           </button>
           <span className="version-tag" data-testid="version-tag">v{status?.version || '2.1.0'}</span>
         </div>
@@ -1188,7 +1326,7 @@ const VEHICLE_OPTIONS = [
 ];
 const ZONES_DOMMAGES = ['Pare-chocs avant', 'Aile avant G', 'Aile avant D', 'Portiere avant G', 'Portiere avant D', 'Portiere arriere G', 'Portiere arriere D', 'Aile arriere G', 'Aile arriere D', 'Pare-chocs arriere', 'Toit', 'Capot', 'Coffre/Hayon'];
 
-function RepriseTab() {
+function RepriseTab({ standalone }) {
   const [sec, setSec] = useState('client');
   const [vinSpecs, setVinSpecs] = useState(null);
   const [vinLoading, setVinLoading] = useState(false);
@@ -1277,24 +1415,32 @@ function RepriseTab() {
     return (
       <div style={{ textAlign: 'center', padding: '4rem 1rem' }}>
         <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '40px', marginBottom: '1.5rem', opacity: 0.8 }} />
-        <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>&#10003;</div>
+        <div style={{ fontSize: '2.5rem', marginBottom: '1rem', color: 'var(--accent-green)' }}>&#10003;</div>
         <h2 style={{ marginBottom: '0.5rem' }}>Demande envoyee!</h2>
         <p style={{ color: 'var(--text-secondary)' }}>Merci {form.prenom}! Notre equipe va analyser votre vehicule et vous contacter rapidement.</p>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '1rem' }}>Kennebec Dodge Chrysler — 418-222-3939</p>
-        <button style={{ ...rs.btnPrimary, marginTop: '1.5rem' }} onClick={() => window.location.reload()}>Nouvelle evaluation</button>
+        {!standalone && <button style={{ ...rs.btnPrimary, marginTop: '1.5rem' }} onClick={() => window.location.reload()}>Nouvelle evaluation</button>}
       </div>
     );
   }
 
   return (
     <div style={{ padding: '0' }} data-testid="reprise-tab">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '24px', objectFit: 'contain', opacity: 0.7 }} />
-          <h2 className="section-title" style={{ margin: 0 }}>Evaluation de reprise</h2>
+      {!standalone && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '24px', objectFit: 'contain', opacity: 0.7 }} />
+            <h2 className="section-title" style={{ margin: 0 }}>Evaluation de reprise</h2>
+          </div>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{secIdx + 1}/{REPRISE_SECTIONS.length}</span>
         </div>
-        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{secIdx + 1}/{REPRISE_SECTIONS.length}</span>
-      </div>
+      )}
+      {standalone && (
+        <div style={{ marginBottom: '1rem' }}>
+          <h2 style={{ fontFamily: 'Chivo', fontWeight: 700, fontSize: '1.25rem', marginBottom: '0.25rem' }}>Evaluation de votre vehicule</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Remplissez le formulaire pour obtenir une estimation de reprise. Etape {secIdx + 1} de {REPRISE_SECTIONS.length}.</p>
+        </div>
+      )}
       <div style={rs.navBar} className="reprise-nav">
         {REPRISE_SECTIONS.map((s, i) => (
           <button key={s} style={rs.navBtn(sec === s)} onClick={() => setSec(s)} data-testid={`reprise-nav-${s}`}>

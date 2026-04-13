@@ -1103,6 +1103,14 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Daniel7$")
 REPRISE_STORAGE_BUCKET = "reprise-photos"
 VIN_DECODE_CACHE = {}
 
+# Dashboard users with roles
+DASHBOARD_USERS = {
+    "admin": {"password": "Daniel7$", "name": "Daniel Giroux", "role": "admin"},
+    "directeur": {"password": "Ventes2025!", "name": "Directeur des ventes", "role": "directeur"},
+    "conseiller1": {"password": "Kenbot2025!", "name": "Conseiller 1", "role": "conseiller"},
+    "conseiller2": {"password": "Kenbot2025!", "name": "Conseiller 2", "role": "conseiller"},
+}
+
 def decode_vin_nhtsa(vin: str) -> dict:
     vin = (vin or "").strip().upper()
     if len(vin) != 17:
@@ -1142,12 +1150,24 @@ async def reprise_decode_vin(vin: str):
 @api_router.post("/reprise/auth/login")
 async def reprise_login(data: dict):
     from fastapi import HTTPException
-    phone = (data.get("phone") or "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "").strip()
+    # Support both phone-based and username-based login
+    username = (data.get("username") or "").strip().lower()
     password = (data.get("password") or "").strip()
+
+    # Check dashboard users
+    if username in DASHBOARD_USERS and DASHBOARD_USERS[username]["password"] == password:
+        user = DASHBOARD_USERS[username]
+        import hashlib
+        token = hashlib.sha256(f"{username}:{password}:{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()[:32]
+        return {"success": True, "token": token, "name": user["name"], "role": user["role"], "username": username}
+
+    # Legacy phone-based login (admin)
+    phone = (data.get("phone") or "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "").strip()
     if phone == ADMIN_PHONE and password == ADMIN_PASSWORD:
         import hashlib
         token = hashlib.sha256(f"{phone}:{password}:{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()[:32]
-        return {"success": True, "token": token, "name": "Daniel Giroux"}
+        return {"success": True, "token": token, "name": "Daniel Giroux", "role": "admin", "username": "admin"}
+
     raise HTTPException(401, "Identifiants incorrects")
 
 @api_router.post("/evaluations")

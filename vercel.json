@@ -7,6 +7,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://kenbot-dashboard-api.onrender.com/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
