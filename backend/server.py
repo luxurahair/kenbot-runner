@@ -1188,6 +1188,57 @@ async def reprise_decode_vin(vin: str):
     return {"vin": vin, "specs": specs}
 
 
+@api_router.post("/vin/scan-photo")
+async def reprise_scan_vin_photo(file: UploadFile = File(...)):
+    """Extrait le VIN depuis une photo (plaque VIN, pare-brise, etc.) via GPT-4o vision."""
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        from fastapi import HTTPException
+        raise HTTPException(400, "Image trop grande (max 10MB)")
+
+    api_key = os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        from fastapi import HTTPException
+        raise HTTPException(500, "Cle IA non configuree")
+
+    import base64
+    b64 = base64.b64encode(content).decode("utf-8")
+
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"vin-scan-{uuid.uuid4().hex[:8]}",
+            system_message="Tu es un expert en identification de vehicules. Tu dois extraire le numero VIN (Vehicle Identification Number) depuis des photos. Le VIN fait toujours exactement 17 caracteres alphanumeriques (pas de I, O, Q). Reponds UNIQUEMENT avec le VIN de 17 caracteres, rien d'autre. Si tu ne peux pas lire le VIN, reponds 'ERREUR' suivi d'une courte explication.",
+        )
+        chat.with_model("openai", "gpt-4o")
+
+        img = ImageContent(image_base64=b64)
+        response = await chat.send_message(UserMessage(
+            text="Lis le numero VIN (17 caracteres) visible sur cette image. Reponds UNIQUEMENT le VIN.",
+            file_contents=[img],
+        ))
+
+        result = response.strip().upper().replace(" ", "").replace("-", "")
+
+        if result.startswith("ERREUR"):
+            return {"success": False, "error": result}
+
+        # Clean: keep only valid VIN chars (no I, O, Q)
+        clean = "".join(c for c in result if c.isalnum())[:17]
+
+        if len(clean) == 17:
+            specs = decode_vin_nhtsa(clean)
+            return {"success": True, "vin": clean, "specs": specs}
+        else:
+            return {"success": False, "error": f"VIN illisible ({len(clean)} caracteres detectes: {clean})", "partial": clean}
+
+    except Exception as e:
+        logging.error(f"VIN scan error: {e}")
+        from fastapi import HTTPException
+        raise HTTPException(500, str(e))
+
+
 @api_router.post("/auth/login")
 async def reprise_admin_login(data: dict):
     phone = (data.get("phone") or "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "").strip()
