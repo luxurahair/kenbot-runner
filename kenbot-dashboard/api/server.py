@@ -1103,13 +1103,21 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Daniel7$")
 REPRISE_STORAGE_BUCKET = "reprise-photos"
 VIN_DECODE_CACHE = {}
 
-# Dashboard users with roles
-DASHBOARD_USERS = {
+# Fallback users if Supabase table not created yet
+FALLBACK_USERS = {
     "admin": {"password": "Daniel7$", "name": "Daniel Giroux", "role": "admin"},
     "directeur": {"password": "Ventes2025!", "name": "Directeur des ventes", "role": "directeur"},
-    "conseiller1": {"password": "Kenbot2025!", "name": "Conseiller 1", "role": "conseiller"},
-    "conseiller2": {"password": "Kenbot2025!", "name": "Conseiller 2", "role": "conseiller"},
 }
+
+def get_dashboard_users():
+    if sb:
+        try:
+            result = sb.table("dashboard_users").select("*").eq("active", True).execute()
+            if result.data:
+                return {u["username"]: u for u in result.data}
+        except Exception as e:
+            logging.warning(f"dashboard_users table not found, using fallback: {e}")
+    return FALLBACK_USERS
 
 def decode_vin_nhtsa(vin: str) -> dict:
     vin = (vin or "").strip().upper()
@@ -1150,25 +1158,74 @@ async def reprise_decode_vin(vin: str):
 @api_router.post("/reprise/auth/login")
 async def reprise_login(data: dict):
     from fastapi import HTTPException
-    # Support both phone-based and username-based login
     username = (data.get("username") or "").strip().lower()
     password = (data.get("password") or "").strip()
+    users = get_dashboard_users()
 
-    # Check dashboard users
-    if username in DASHBOARD_USERS and DASHBOARD_USERS[username]["password"] == password:
-        user = DASHBOARD_USERS[username]
-        import hashlib
-        token = hashlib.sha256(f"{username}:{password}:{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()[:32]
-        return {"success": True, "token": token, "name": user["name"], "role": user["role"], "username": username}
-
-    # Legacy phone-based login (admin)
-    phone = (data.get("phone") or "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "").strip()
-    if phone == ADMIN_PHONE and password == ADMIN_PASSWORD:
-        import hashlib
-        token = hashlib.sha256(f"{phone}:{password}:{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()[:32]
-        return {"success": True, "token": token, "name": "Daniel Giroux", "role": "admin", "username": "admin"}
+    if username in users:
+        u = users[username]
+        if u["password"] == password:
+            import hashlib
+            token = hashlib.sha256(f"{username}:{password}:{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()[:32]
+            return {"success": True, "token": token, "name": u["name"], "role": u["role"], "username": username}
 
     raise HTTPException(401, "Identifiants incorrects")
+
+
+@api_router.get("/users")
+async def list_users():
+    users = get_dashboard_users()
+    return {"users": [{"username": k, "name": v["name"], "role": v["role"]} for k, v in users.items()]}
+
+
+@api_router.post("/users")
+async def create_user(data: dict):
+    from fastapi import HTTPException
+    if not sb:
+        raise HTTPException(500, "DB non connectee")
+    username = (data.get("username") or "").strip().lower()
+    password = (data.get("password") or "").strip()
+    name = (data.get("name") or "").strip()
+    role = data.get("role", "conseiller")
+    if not username or not password or not name:
+        raise HTTPException(400, "Champs requis: username, password, name")
+    if role not in ("admin", "directeur", "conseiller"):
+        raise HTTPException(400, "Role invalide")
+    try:
+        sb.table("dashboard_users").insert({"username": username, "password": password, "name": name, "role": role}).execute()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@api_router.patch("/users/{username}")
+async def update_user(username: str, data: dict):
+    from fastapi import HTTPException
+    if not sb:
+        raise HTTPException(500, "DB non connectee")
+    allowed = {"password", "name", "role", "active"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    if not update:
+        raise HTTPException(400, "Rien a modifier")
+    try:
+        sb.table("dashboard_users").update(update).eq("username", username).execute()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@api_router.delete("/users/{username}")
+async def delete_user(username: str):
+    from fastapi import HTTPException
+    if not sb:
+        raise HTTPException(500, "DB non connectee")
+    if username == "admin":
+        raise HTTPException(400, "Impossible de supprimer l'admin")
+    try:
+        sb.table("dashboard_users").delete().eq("username", username).execute()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 @api_router.post("/evaluations")
 async def reprise_create_evaluation(data: dict):

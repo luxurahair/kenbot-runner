@@ -6,7 +6,7 @@ const API = process.env.REACT_APP_BACKEND_URL;
 
 // Role-based tab access
 const ROLE_TABS = {
-  admin: ['cockpit', 'compare', 'reprise', 'evaluations', 'dashboard', 'inventory', 'posts', 'textpreview', 'events', 'architecture', 'changelog'],
+  admin: ['cockpit', 'compare', 'reprise', 'evaluations', 'utilisateurs', 'dashboard', 'inventory', 'posts', 'textpreview', 'events', 'architecture', 'changelog'],
   directeur: ['evaluations', 'reprise', 'inventory'],
   conseiller: ['reprise', 'evaluations'],
 };
@@ -180,6 +180,7 @@ function Dashboard({ user, allowedTabs, onLogout }) {
             {tab === 'compare' && <CompareTab />}
             {tab === 'reprise' && <RepriseTab />}
             {tab === 'evaluations' && <EvaluationsTab />}
+            {tab === 'utilisateurs' && <UtilisateursTab />}
             {tab === 'dashboard' && <DashboardTab status={status} events={events} posts={posts} />}
             {tab === 'inventory' && <InventoryTab inventory={inventory} />}
             {tab === 'posts' && <PostsTab posts={posts} />}
@@ -201,6 +202,7 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
     { id: 'compare', label: 'Kennebec vs FB' },
     { id: 'reprise', label: 'Reprise' },
     { id: 'evaluations', label: 'Evaluations' },
+    { id: 'utilisateurs', label: 'Utilisateurs' },
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'inventory', label: 'Inventaire' },
     { id: 'posts', label: 'Posts FB' },
@@ -1441,135 +1443,108 @@ function RepriseTab({ standalone }) {
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Remplissez le formulaire pour obtenir une estimation de reprise. Etape {secIdx + 1} de {REPRISE_SECTIONS.length}.</p>
         </div>
       )}
-      <div style={rs.navBar} className="reprise-nav">
-        {REPRISE_SECTIONS.map((s, i) => (
-          <button key={s} style={rs.navBtn(sec === s)} onClick={() => setSec(s)} data-testid={`reprise-nav-${s}`}>
-            {i < secIdx ? '✓ ' : ''}{REPRISE_LABELS[s]}
-          </button>
+      {/* ALL SECTIONS SCROLLABLE */}
+
+      {/* 1. CLIENT */}
+      <div style={rs.card}><div style={rs.cardTitle}>1. Informations du client</div>
+        <div style={rs.row}>
+          <div><label style={rs.label}>Prenom *</label><input style={rs.input} value={form.prenom} onChange={e => up('prenom', e.target.value)} data-testid="reprise-prenom" /></div>
+          <div><label style={rs.label}>Nom *</label><input style={rs.input} value={form.nom} onChange={e => up('nom', e.target.value)} data-testid="reprise-nom" /></div>
+        </div>
+        <div style={{ ...rs.row, marginTop: '0.75rem' }}>
+          <div><label style={rs.label}>Telephone *</label><input style={rs.input} type="tel" value={form.telephone} onChange={e => up('telephone', e.target.value)} data-testid="reprise-tel" /></div>
+          <div><label style={rs.label}>Courriel</label><input style={rs.input} type="email" value={form.courriel} onChange={e => up('courriel', e.target.value)} /></div>
+        </div>
+      </div>
+      <div style={rs.card}><div style={rs.cardTitle}>Transaction</div>
+        <div style={rs.row}>
+          <div><label style={rs.label}>Type</label><select style={rs.input} value={form.type_transaction} onChange={e => up('type_transaction', e.target.value)}><option value="">—</option>{TYPES_TRANSACTION.map(t => <option key={t}>{t}</option>)}</select></div>
+          <div><label style={rs.label}>Interet</label><select style={rs.input} value={form.interet} onChange={e => up('interet', e.target.value)}><option value="">—</option>{INTERET_CLIENT.map(t => <option key={t}>{t}</option>)}</select></div>
+          <div><label style={rs.label}>Provenance</label><select style={rs.input} value={form.provenance} onChange={e => up('provenance', e.target.value)}><option value="">—</option>{PROVENANCES.map(p => <option key={p}>{p}</option>)}</select></div>
+        </div>
+      </div>
+
+      {/* 2. VEHICULE */}
+      <div style={rs.card}><div style={rs.cardTitle}>2. Identification du vehicule</div>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <input style={{ ...rs.input, flex: 1, minWidth: '200px', fontFamily: 'IBM Plex Mono', textTransform: 'uppercase' }} value={form.vin} onChange={e => { up('vin', e.target.value.toUpperCase().slice(0, 17)); setVinError(''); }} maxLength={17} placeholder="Entrez le VIN (17 caracteres)" data-testid="reprise-vin" />
+          <button style={rs.btnPrimary} onClick={decodeVin} disabled={vinLoading} data-testid="reprise-decode">{vinLoading ? '...' : 'Decoder'}</button>
+        </div>
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '4px' }}>{form.vin.length}/17</div>
+        {vinError && <div style={{ color: 'var(--accent-red)', fontSize: '0.8rem', marginTop: '0.5rem' }}>{vinError}</div>}
+        {vinSpecs && (
+          <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--surface-secondary)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+            <div style={rs.row}>
+              {[['Marque', vinSpecs.make], ['Modele', vinSpecs.model], ['Annee', vinSpecs.year], ['Trim', vinSpecs.trim], ['Moteur', `${vinSpecs.engine_cylinders||''}cyl ${vinSpecs.engine_displacement||''}L ${vinSpecs.engine_hp||''}HP`.trim()], ['Motricite', vinSpecs.drive_type]].filter(([,v]) => v && v !== 'cyl LHP').map(([l,v]) => (
+                <div key={l} style={{ padding: '6px 0', borderBottom: '1px solid var(--border)' }}><span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{l}</span><br/><span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{v}</span></div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={rs.card}><div style={rs.cardTitle}>Details du vehicule</div>
+        <div style={rs.row}>
+          <div><label style={rs.label}>Kilometrage</label><input style={rs.input} value={form.km} onChange={e => up('km', e.target.value)} data-testid="reprise-km" /></div>
+          <div><label style={rs.label}>Cles</label><select style={rs.input} value={form.nombre_cles} onChange={e => up('nombre_cles', e.target.value)}>{['0','1','2','3+'].map(n => <option key={n}>{n}</option>)}</select></div>
+          <div><label style={rs.label}>Couleur ext.</label><select style={rs.input} value={form.couleur_ext} onChange={e => up('couleur_ext', e.target.value)}><option value="">—</option>{COULEURS_EXT.map(c => <option key={c}>{c}</option>)}</select></div>
+          <div><label style={rs.label}>Couleur int.</label><select style={rs.input} value={form.couleur_int} onChange={e => up('couleur_int', e.target.value)}><option value="">—</option>{COULEURS_INT.map(c => <option key={c}>{c}</option>)}</select></div>
+        </div>
+      </div>
+
+      {/* 3. OPTIONS */}
+      <div style={rs.card}><div style={rs.cardTitle}>3. Options du vehicule <span style={{ fontWeight: 400, color: 'var(--text-secondary)', fontSize: '0.8rem' }}>({form.options.length} selectionnees)</span></div>
+        {VEHICLE_OPTIONS.map(cat => (
+          <div key={cat.cat} style={{ marginBottom: '0.75rem' }}>
+            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent-blue)', marginBottom: '0.4rem' }}>{cat.cat}</div>
+            <div>{cat.items.map(o => <span key={o} style={rs.chip(form.options.includes(o))} onClick={() => togOpt(o)}>{form.options.includes(o) ? '✓ ' : ''}{o}</span>)}</div>
+          </div>
         ))}
       </div>
 
-      {sec === 'client' && (
-        <>
-          <div style={rs.card}><div style={rs.cardTitle}>Informations du client</div>
-            <div style={rs.row}>
-              <div><label style={rs.label}>Prenom *</label><input style={rs.input} value={form.prenom} onChange={e => up('prenom', e.target.value)} data-testid="reprise-prenom" /></div>
-              <div><label style={rs.label}>Nom *</label><input style={rs.input} value={form.nom} onChange={e => up('nom', e.target.value)} data-testid="reprise-nom" /></div>
-            </div>
-            <div style={{ ...rs.row, marginTop: '0.75rem' }}>
-              <div><label style={rs.label}>Telephone *</label><input style={rs.input} type="tel" value={form.telephone} onChange={e => up('telephone', e.target.value)} data-testid="reprise-tel" /></div>
-              <div><label style={rs.label}>Courriel</label><input style={rs.input} type="email" value={form.courriel} onChange={e => up('courriel', e.target.value)} /></div>
-            </div>
-          </div>
-          <div style={rs.card}><div style={rs.cardTitle}>Transaction</div>
-            <div style={rs.row}>
-              <div><label style={rs.label}>Type</label><select style={rs.input} value={form.type_transaction} onChange={e => up('type_transaction', e.target.value)}><option value="">—</option>{TYPES_TRANSACTION.map(t => <option key={t}>{t}</option>)}</select></div>
-              <div><label style={rs.label}>Interet</label><select style={rs.input} value={form.interet} onChange={e => up('interet', e.target.value)}><option value="">—</option>{INTERET_CLIENT.map(t => <option key={t}>{t}</option>)}</select></div>
-              <div><label style={rs.label}>Provenance</label><select style={rs.input} value={form.provenance} onChange={e => up('provenance', e.target.value)}><option value="">—</option>{PROVENANCES.map(p => <option key={p}>{p}</option>)}</select></div>
-            </div>
-          </div>
-        </>
-      )}
+      {/* 4. ETAT */}
+      <div style={rs.card}><div style={rs.cardTitle}>4. Etat general</div>
+        <div style={rs.etatBar}>{ETATS_GENERAL.map(e => <div key={e.value} style={rs.etatSeg(e.color, form.etat_general >= e.value)} onClick={() => up('etat_general', e.value)} data-testid={`reprise-etat-${e.value}`}>{e.label}</div>)}</div>
+      </div>
+      <div style={rs.card}><div style={rs.cardTitle}>Pare-brise</div>
+        <div>{ETATS_PAREBRISE.map(e => <span key={e} style={rs.chip(form.etat_parebrise === e)} onClick={() => up('etat_parebrise', e)}>{e}</span>)}</div>
+      </div>
+      <div style={rs.card}><div style={rs.cardTitle}>Dommages carrosserie</div>
+        <div>{ZONES_DOMMAGES.map(z => <span key={z} style={rs.dmgChip(form.dommages.includes(z))} onClick={() => togDmg(z)}>{form.dommages.includes(z) ? '✕ ' : ''}{z}</span>)}</div>
+      </div>
+      <div style={rs.card}><div style={rs.cardTitle}>Etat mecanique</div>
+        <textarea style={{ ...rs.input, minHeight: '80px', resize: 'vertical' }} value={form.etat_mecanique} onChange={e => up('etat_mecanique', e.target.value)} placeholder="Bruits, problemes connus, entretien recent..." />
+      </div>
 
-      {sec === 'vehicle' && (
-        <>
-          <div style={rs.card}><div style={rs.cardTitle}>Identification par VIN</div>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <input style={{ ...rs.input, flex: 1, minWidth: '200px', fontFamily: 'IBM Plex Mono', textTransform: 'uppercase' }} value={form.vin} onChange={e => { up('vin', e.target.value.toUpperCase().slice(0, 17)); setVinError(''); }} maxLength={17} placeholder="17 caracteres" data-testid="reprise-vin" />
-              <button style={rs.btnPrimary} onClick={decodeVin} disabled={vinLoading} data-testid="reprise-decode">{vinLoading ? '...' : 'Decoder'}</button>
-            </div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '4px' }}>{form.vin.length}/17</div>
-            {vinError && <div style={{ color: 'var(--accent-red)', fontSize: '0.8rem', marginTop: '0.5rem' }}>{vinError}</div>}
+      {/* 5. PHOTOS */}
+      <div style={rs.card}><div style={rs.cardTitle}>5. Photos ({photos.length}/10)</div>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>Exterieur (4 cotes), interieur, odometre, defauts</p>
+        <input type="file" accept="image/*" multiple onChange={handlePhotos} style={{ display: 'none' }} id="reprise-photo-input" />
+        <label htmlFor="reprise-photo-input" style={{ ...rs.btnSecondary, display: 'block', textAlign: 'center', cursor: 'pointer', padding: '1.5rem' }}>{uploading ? 'Envoi...' : 'Ajouter des photos'}</label>
+        {photos.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '0.5rem', marginTop: '0.75rem' }}>
+            {photos.map((p, i) => <div key={i} style={{ position: 'relative' }}><img src={p.url} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--border)' }} /><button onClick={() => setPhotos(pr => pr.filter((_, j) => j !== i))} style={{ position: 'absolute', top: 2, right: 2, background: 'var(--accent-red)', color: '#fff', border: 'none', borderRadius: '50%', width: 20, height: 20, fontSize: '0.6rem', cursor: 'pointer' }}>✕</button></div>)}
           </div>
-          {vinSpecs && (
-            <div style={rs.card}><div style={rs.cardTitle}>Vehicule identifie</div>
-              <div style={rs.row}>
-                {[['Marque', vinSpecs.make], ['Modele', vinSpecs.model], ['Annee', vinSpecs.year], ['Trim', vinSpecs.trim], ['Moteur', `${vinSpecs.engine_cylinders||''}cyl ${vinSpecs.engine_displacement||''}L ${vinSpecs.engine_hp||''}HP`.trim()], ['Motricite', vinSpecs.drive_type]].filter(([,v]) => v && v !== 'cyl LHP').map(([l,v]) => (
-                  <div key={l} style={{ padding: '6px 0', borderBottom: '1px solid var(--border)' }}><span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{l}</span><br/><span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{v}</span></div>
-                ))}
-              </div>
-            </div>
-          )}
-          <div style={rs.card}><div style={rs.cardTitle}>Details</div>
-            <div style={rs.row}>
-              <div><label style={rs.label}>Kilometrage</label><input style={rs.input} value={form.km} onChange={e => up('km', e.target.value)} data-testid="reprise-km" /></div>
-              <div><label style={rs.label}>Cles</label><select style={rs.input} value={form.nombre_cles} onChange={e => up('nombre_cles', e.target.value)}>{['0','1','2','3+'].map(n => <option key={n}>{n}</option>)}</select></div>
-              <div><label style={rs.label}>Couleur ext.</label><select style={rs.input} value={form.couleur_ext} onChange={e => up('couleur_ext', e.target.value)}><option value="">—</option>{COULEURS_EXT.map(c => <option key={c}>{c}</option>)}</select></div>
-              <div><label style={rs.label}>Couleur int.</label><select style={rs.input} value={form.couleur_int} onChange={e => up('couleur_int', e.target.value)}><option value="">—</option>{COULEURS_INT.map(c => <option key={c}>{c}</option>)}</select></div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {sec === 'options' && (
-        <>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>{form.options.length} option{form.options.length !== 1 ? 's' : ''}</p>
-          {VEHICLE_OPTIONS.map(cat => (
-            <div key={cat.cat} style={rs.card}><div style={rs.cardTitle}>{cat.cat}</div>
-              <div>{cat.items.map(o => <span key={o} style={rs.chip(form.options.includes(o))} onClick={() => togOpt(o)}>{form.options.includes(o) ? '✓ ' : ''}{o}</span>)}</div>
-            </div>
-          ))}
-        </>
-      )}
-
-      {sec === 'etat' && (
-        <>
-          <div style={rs.card}><div style={rs.cardTitle}>Etat general</div>
-            <div style={rs.etatBar}>{ETATS_GENERAL.map(e => <div key={e.value} style={rs.etatSeg(e.color, form.etat_general >= e.value)} onClick={() => up('etat_general', e.value)} data-testid={`reprise-etat-${e.value}`}>{e.label}</div>)}</div>
-          </div>
-          <div style={rs.card}><div style={rs.cardTitle}>Pare-brise</div>
-            <div>{ETATS_PAREBRISE.map(e => <span key={e} style={rs.chip(form.etat_parebrise === e)} onClick={() => up('etat_parebrise', e)}>{e}</span>)}</div>
-          </div>
-          <div style={rs.card}><div style={rs.cardTitle}>Dommages carrosserie</div>
-            <div>{ZONES_DOMMAGES.map(z => <span key={z} style={rs.dmgChip(form.dommages.includes(z))} onClick={() => togDmg(z)}>{form.dommages.includes(z) ? '✕ ' : ''}{z}</span>)}</div>
-          </div>
-          <div style={rs.card}><div style={rs.cardTitle}>Mecanique</div>
-            <textarea style={{ ...rs.input, minHeight: '80px', resize: 'vertical' }} value={form.etat_mecanique} onChange={e => up('etat_mecanique', e.target.value)} placeholder="Bruits, problemes connus..." />
-          </div>
-        </>
-      )}
-
-      {sec === 'photos' && (
-        <div style={rs.card}><div style={rs.cardTitle}>Photos ({photos.length}/10)</div>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>Exterieur, interieur, odometre, defauts</p>
-          <input type="file" accept="image/*" multiple onChange={handlePhotos} style={{ display: 'none' }} id="reprise-photo-input" />
-          <label htmlFor="reprise-photo-input" style={{ ...rs.btnSecondary, display: 'block', textAlign: 'center', cursor: 'pointer', padding: '1.5rem' }}>{uploading ? 'Envoi...' : 'Ajouter des photos'}</label>
-          {photos.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '0.5rem', marginTop: '0.75rem' }}>
-              {photos.map((p, i) => <div key={i} style={{ position: 'relative' }}><img src={p.url} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--border)' }} /><button onClick={() => setPhotos(pr => pr.filter((_, j) => j !== i))} style={{ position: 'absolute', top: 2, right: 2, background: 'var(--accent-red)', color: '#fff', border: 'none', borderRadius: '50%', width: 20, height: 20, fontSize: '0.6rem', cursor: 'pointer' }}>✕</button></div>)}
-            </div>
-          )}
-        </div>
-      )}
-
-      {sec === 'garanties' && (
-        <>
-          <div style={rs.card}><div style={rs.cardTitle}>Garantie constructeur</div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={form.garantie_constructeur} onChange={e => up('garantie_constructeur', e.target.checked)} /> Encore valide</label>
-            {form.garantie_constructeur && <div style={{ marginTop: '0.5rem' }}><label style={rs.label}>Date expiration</label><input style={rs.input} type="date" value={form.garantie_constructeur_date} onChange={e => up('garantie_constructeur_date', e.target.value)} /></div>}
-          </div>
-          <div style={rs.card}><div style={rs.cardTitle}>Garantie prolongee</div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={form.garantie_prolongee} onChange={e => up('garantie_prolongee', e.target.checked)} /> Oui</label>
-            {form.garantie_prolongee && <div style={{ marginTop: '0.5rem' }}><label style={rs.label}>Details</label><textarea style={{ ...rs.input, minHeight: '60px' }} value={form.garantie_prolongee_detail} onChange={e => up('garantie_prolongee_detail', e.target.value)} placeholder="Fournisseur, couverture..." /></div>}
-          </div>
-        </>
-      )}
-
-      {sec === 'notes' && (
-        <div style={rs.card}><div style={rs.cardTitle}>Commentaires</div>
-          <textarea style={{ ...rs.input, minHeight: '150px', resize: 'vertical' }} value={form.commentaires} onChange={e => up('commentaires', e.target.value)} placeholder="Historique, reparations, raison de vente..." data-testid="reprise-commentaires" />
-        </div>
-      )}
-
-      <div style={rs.bottomBar}>
-        {secIdx > 0 && <button style={rs.btnSecondary} onClick={goPrev}>Precedent</button>}
-        {secIdx < REPRISE_SECTIONS.length - 1 ? (
-          <button style={rs.btnPrimary} onClick={goNext}>Suivant</button>
-        ) : (
-          <button style={{ ...rs.btnPrimary, opacity: canSubmit && !submitting ? 1 : 0.5 }} onClick={handleSubmit} disabled={!canSubmit || submitting} data-testid="reprise-submit">
-            {submitting ? 'Envoi...' : 'Envoyer'}
-          </button>
         )}
+      </div>
+
+      {/* 6. GARANTIES */}
+      <div style={rs.card}><div style={rs.cardTitle}>6. Garanties</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.5rem' }}><input type="checkbox" checked={form.garantie_constructeur} onChange={e => up('garantie_constructeur', e.target.checked)} /> Garantie constructeur encore valide</label>
+        {form.garantie_constructeur && <div style={{ marginBottom: '0.75rem' }}><label style={rs.label}>Date expiration</label><input style={rs.input} type="date" value={form.garantie_constructeur_date} onChange={e => up('garantie_constructeur_date', e.target.value)} /></div>}
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={form.garantie_prolongee} onChange={e => up('garantie_prolongee', e.target.checked)} /> Garantie prolongee</label>
+        {form.garantie_prolongee && <div style={{ marginTop: '0.5rem' }}><label style={rs.label}>Details</label><textarea style={{ ...rs.input, minHeight: '60px' }} value={form.garantie_prolongee_detail} onChange={e => up('garantie_prolongee_detail', e.target.value)} placeholder="Fournisseur, couverture..." /></div>}
+      </div>
+
+      {/* 7. NOTES */}
+      <div style={rs.card}><div style={rs.cardTitle}>7. Commentaires</div>
+        <textarea style={{ ...rs.input, minHeight: '120px', resize: 'vertical' }} value={form.commentaires} onChange={e => up('commentaires', e.target.value)} placeholder="Historique d'accidents, reparations, raison de vente..." data-testid="reprise-commentaires" />
+      </div>
+
+      {/* SUBMIT */}
+      <div style={rs.bottomBar}>
+        <button style={{ ...rs.btnPrimary, opacity: canSubmit && !submitting ? 1 : 0.5, padding: '14px 32px', fontSize: '1rem' }} onClick={handleSubmit} disabled={!canSubmit || submitting} data-testid="reprise-submit">
+          {submitting ? 'Envoi en cours...' : 'Envoyer ma demande'}
+        </button>
       </div>
     </div>
   );
@@ -1680,6 +1655,114 @@ function EvaluationsTab() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════
+// UTILISATEURS TAB — Admin user management
+// ═══════════════════════════════════════════════════
+
+const ROLE_LABELS = { admin: 'Administrateur', directeur: 'Directeur des ventes', conseiller: 'Conseiller' };
+const ROLE_COLORS = { admin: '#ef4444', directeur: '#a855f7', conseiller: '#0ea5e9' };
+
+function UtilisateursTab() {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editUser, setEditUser] = useState(null);
+  const [newUser, setNewUser] = useState({ username: '', password: '', name: '', role: 'conseiller' });
+
+  const fetchUsers = useCallback(async () => {
+    setLoading(true);
+    try { const r = await fetch(`${API}/api/users`); const d = await r.json(); setUsers(d.users || []); } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { fetchUsers(); }, [fetchUsers]);
+
+  const handleAdd = async () => {
+    if (!newUser.username || !newUser.password || !newUser.name) return;
+    try {
+      const r = await fetch(`${API}/api/users`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newUser) });
+      if (r.ok) { setShowAdd(false); setNewUser({ username: '', password: '', name: '', role: 'conseiller' }); fetchUsers(); }
+    } catch (e) { console.error(e); }
+  };
+
+  const handleUpdate = async () => {
+    if (!editUser) return;
+    try {
+      await fetch(`${API}/api/users/${editUser.username}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editUser.changes) });
+      setEditUser(null); fetchUsers();
+    } catch (e) { console.error(e); }
+  };
+
+  const handleDelete = async (username) => {
+    if (!window.confirm(`Supprimer ${username}?`)) return;
+    try { await fetch(`${API}/api/users/${username}`, { method: 'DELETE' }); fetchUsers(); } catch (e) { console.error(e); }
+  };
+
+  const is = { // input styles
+    input: { width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.9rem', fontFamily: 'IBM Plex Sans', background: 'var(--surface)' },
+    label: { display: 'block', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' },
+    btn: { padding: '10px 20px', borderRadius: '6px', border: 'none', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', background: 'var(--accent-blue)', color: '#fff' },
+    btnSec: { padding: '10px 20px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', background: 'var(--surface)', color: 'var(--text-secondary)' },
+  };
+
+  return (
+    <div data-testid="utilisateurs-tab">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+        <h2 className="section-title" style={{ margin: 0 }}>Gestion des utilisateurs</h2>
+        <button style={is.btn} onClick={() => setShowAdd(!showAdd)} data-testid="add-user-btn">{showAdd ? 'Annuler' : '+ Ajouter'}</button>
+      </div>
+
+      {showAdd && (
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1.25rem', marginBottom: '1rem' }}>
+          <div style={{ fontFamily: 'Chivo', fontWeight: 700, marginBottom: '0.75rem' }}>Nouvel utilisateur</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
+            <div><label style={is.label}>Nom complet</label><input style={is.input} value={newUser.name} onChange={e => setNewUser(n => ({ ...n, name: e.target.value }))} data-testid="new-user-name" /></div>
+            <div><label style={is.label}>Identifiant</label><input style={is.input} value={newUser.username} onChange={e => setNewUser(n => ({ ...n, username: e.target.value.toLowerCase().replace(/\s/g, '') }))} data-testid="new-user-username" /></div>
+            <div><label style={is.label}>Mot de passe</label><input style={is.input} value={newUser.password} onChange={e => setNewUser(n => ({ ...n, password: e.target.value }))} data-testid="new-user-password" /></div>
+            <div><label style={is.label}>Role</label><select style={is.input} value={newUser.role} onChange={e => setNewUser(n => ({ ...n, role: e.target.value }))} data-testid="new-user-role"><option value="conseiller">Conseiller</option><option value="directeur">Directeur des ventes</option><option value="admin">Administrateur</option></select></div>
+          </div>
+          <div style={{ marginTop: '1rem' }}><button style={is.btn} onClick={handleAdd} data-testid="save-user-btn">Creer</button></div>
+        </div>
+      )}
+
+      {editUser && (
+        <div style={{ background: 'var(--surface)', border: '2px solid var(--accent-blue)', borderRadius: '8px', padding: '1.25rem', marginBottom: '1rem' }}>
+          <div style={{ fontFamily: 'Chivo', fontWeight: 700, marginBottom: '0.75rem' }}>Modifier: {editUser.username}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
+            <div><label style={is.label}>Nom</label><input style={is.input} value={editUser.changes.name || ''} onChange={e => setEditUser(u => ({ ...u, changes: { ...u.changes, name: e.target.value } }))} /></div>
+            <div><label style={is.label}>Nouveau mot de passe</label><input style={is.input} value={editUser.changes.password || ''} onChange={e => setEditUser(u => ({ ...u, changes: { ...u.changes, password: e.target.value } }))} placeholder="Laisser vide pour ne pas changer" /></div>
+            <div><label style={is.label}>Role</label><select style={is.input} value={editUser.changes.role || ''} onChange={e => setEditUser(u => ({ ...u, changes: { ...u.changes, role: e.target.value } }))}><option value="conseiller">Conseiller</option><option value="directeur">Directeur</option><option value="admin">Admin</option></select></div>
+          </div>
+          <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
+            <button style={is.btn} onClick={handleUpdate}>Sauvegarder</button>
+            <button style={is.btnSec} onClick={() => setEditUser(null)}>Annuler</button>
+          </div>
+        </div>
+      )}
+
+      <div>
+        {users.map(u => {
+          const rc = ROLE_COLORS[u.role] || '#6b7280';
+          return (
+            <div key={u.username} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem', marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }} data-testid={`user-card-${u.username}`}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>{u.name}</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontFamily: 'IBM Plex Mono' }}>{u.username}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ padding: '3px 10px', borderRadius: '10px', fontSize: '0.7rem', fontWeight: 700, background: `${rc}20`, color: rc, border: `1px solid ${rc}40` }}>{ROLE_LABELS[u.role] || u.role}</span>
+                <button onClick={() => setEditUser({ username: u.username, changes: { name: u.name, role: u.role, password: '' } })} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', padding: '4px 10px', fontSize: '0.7rem', cursor: 'pointer', color: 'var(--text-secondary)' }}>Modifier</button>
+                {u.username !== 'admin' && <button onClick={() => handleDelete(u.username)} style={{ background: 'none', border: '1px solid var(--accent-red)', borderRadius: '4px', padding: '4px 10px', fontSize: '0.7rem', cursor: 'pointer', color: 'var(--accent-red)' }}>Supprimer</button>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
