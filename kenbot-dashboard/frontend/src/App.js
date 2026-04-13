@@ -178,8 +178,8 @@ function Dashboard({ user, allowedTabs, onLogout }) {
           <>
             {tab === 'cockpit' && <CockpitTab inventory={inventory} status={status} />}
             {tab === 'compare' && <CompareTab />}
-            {tab === 'reprise' && <RepriseTab />}
-            {tab === 'evaluations' && <EvaluationsTab />}
+            {tab === 'reprise' && <RepriseTab user={user} />}
+            {tab === 'evaluations' && <EvaluationsTab user={user} />}
             {tab === 'utilisateurs' && <UtilisateursTab />}
             {tab === 'dashboard' && <DashboardTab status={status} events={events} posts={posts} />}
             {tab === 'inventory' && <InventoryTab inventory={inventory} />}
@@ -1328,7 +1328,7 @@ const VEHICLE_OPTIONS = [
 ];
 const ZONES_DOMMAGES = ['Pare-chocs avant', 'Aile avant G', 'Aile avant D', 'Portiere avant G', 'Portiere avant D', 'Portiere arriere G', 'Portiere arriere D', 'Aile arriere G', 'Aile arriere D', 'Pare-chocs arriere', 'Toit', 'Capot', 'Coffre/Hayon'];
 
-function RepriseTab({ standalone }) {
+function RepriseTab({ standalone, user }) {
   const [sec, setSec] = useState('client');
   const [vinSpecs, setVinSpecs] = useState(null);
   const [vinLoading, setVinLoading] = useState(false);
@@ -1387,6 +1387,7 @@ function RepriseTab({ standalone }) {
         km: form.km ? parseInt(form.km.replace(/\D/g, '')) : null,
         paiement_restant: form.solde_montant ? parseFloat(form.solde_montant.replace(/\D/g, '')) : null,
         etat_general: ETATS_GENERAL.find(e => e.value === form.etat_general)?.label || '',
+        created_by: user?.username || 'client',
       };
       const r = await fetch(`${API}/api/evaluations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (r.ok) setSubmitted(true);
@@ -1557,7 +1558,7 @@ function RepriseTab({ standalone }) {
 const EVAL_STATUTS = ['NOUVEAU', 'EN EVALUATION', 'OFFRE ENVOYEE', 'ACCEPTE', 'REFUSE'];
 const EVAL_COLORS = { 'NOUVEAU': '#3b82f6', 'EN EVALUATION': '#eab308', 'OFFRE ENVOYEE': '#a855f7', 'ACCEPTE': '#22c55e', 'REFUSE': '#ef4444' };
 
-function EvaluationsTab() {
+function EvaluationsTab({ user }) {
   const [evals, setEvals] = useState([]);
   const [selected, setSelected] = useState(null);
   const [filter, setFilter] = useState('all');
@@ -1566,9 +1567,18 @@ function EvaluationsTab() {
 
   const fetchEvals = useCallback(async () => {
     setLoading(true);
-    try { const r = await fetch(`${API}/api/evaluations`); const d = await r.json(); setEvals(d.evaluations || []); } catch (e) { console.error(e); }
+    try {
+      let url = `${API}/api/evaluations`;
+      const params = [];
+      if (user?.role) params.push(`role=${user.role}`);
+      if (user?.username) params.push(`created_by=${user.username}`);
+      if (params.length) url += '?' + params.join('&');
+      const r = await fetch(url);
+      const d = await r.json();
+      setEvals(d.evaluations || []);
+    } catch (e) { console.error(e); }
     setLoading(false);
-  }, []);
+  }, [user]);
 
   useEffect(() => { fetchEvals(); }, [fetchEvals]);
 

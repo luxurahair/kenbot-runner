@@ -1240,6 +1240,7 @@ async def reprise_create_evaluation(data: dict):
         "id": str(uuid.uuid4()),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "status": "NOUVEAU",
+        "created_by": (data.get("created_by") or "client").strip(),
         "client_name": f"{(data.get('prenom') or '').strip()} {(data.get('nom') or '').strip()}".strip(),
         "client_phone": (data.get("telephone") or "").strip(),
         "client_email": (data.get("courriel") or "").strip(),
@@ -1261,11 +1262,15 @@ async def reprise_create_evaluation(data: dict):
         raise HTTPException(500, str(e))
 
 @api_router.get("/evaluations")
-async def reprise_list_evaluations():
+async def reprise_list_evaluations(created_by: str = None, role: str = None):
     if not sb:
         return {"evaluations": []}
     try:
-        result = sb.table("evaluations").select("*").order("created_at", desc=True).limit(200).execute()
+        q = sb.table("evaluations").select("*").order("created_at", desc=True).limit(200)
+        # Conseillers only see their own evaluations
+        if role == "conseiller" and created_by:
+            q = q.eq("created_by", created_by)
+        result = q.execute()
         return {"evaluations": result.data or []}
     except Exception as e:
         logging.error(f"List evaluations error: {e}")
