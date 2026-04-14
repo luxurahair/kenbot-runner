@@ -1342,7 +1342,7 @@ function RepriseTab({ standalone, user }) {
   const [form, setForm] = useState({
     prenom: '', nom: '', telephone: '', courriel: '',
     type_transaction: '', solde_du: false, solde_montant: '', institution: '', versement: '', frequence_versement: '', interet: '', provenance: '', notes_client: '',
-    vin: '', km: '', couleur_ext: '', couleur_int: '', nombre_cles: '2',
+    vin: '', km: '', couleur_ext: '', couleur_int: '', nombre_cles: '1',
     options: [], etat_general: 3, etat_parebrise: 'Bon etat', etat_mecanique: '', dommages: [],
     garantie_constructeur: false, garantie_constructeur_date: '', garantie_prolongee: false, garantie_prolongee_detail: '',
     commentaires: '',
