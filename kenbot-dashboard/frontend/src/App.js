@@ -1334,6 +1334,8 @@ function RepriseTab({ standalone, user }) {
   const [vinLoading, setVinLoading] = useState(false);
   const [vinError, setVinError] = useState('');
   const [vinScanning, setVinScanning] = useState(false);
+  const [trimOverride, setTrimOverride] = useState('');
+  const [vinNhtsaTrims, setVinNhtsaTrims] = useState([]);
   const [photos, setPhotos] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -1357,11 +1359,16 @@ function RepriseTab({ standalone, user }) {
   const decodeVin = async () => {
     const v = form.vin.trim().toUpperCase();
     if (v.length !== 17) { setVinError('VIN: 17 caracteres'); return; }
-    setVinLoading(true); setVinError('');
+    setVinLoading(true); setVinError(''); setTrimOverride('');
     try {
       const r = await fetch(`${API}/api/vin/${v}`);
       if (!r.ok) throw new Error('VIN non trouve');
-      setVinSpecs((await r.json()).specs);
+      const data = await r.json();
+      setVinSpecs(data.specs);
+      const rawTrim = data.specs?.trim || '';
+      if (rawTrim.includes(',') || rawTrim.includes('/')) {
+        setVinNhtsaTrims(rawTrim.split(/[,/]/).map(t => t.trim()).filter(Boolean));
+      } else { setVinNhtsaTrims([]); }
     } catch (e) { setVinError(e.message); }
     setVinLoading(false);
   };
@@ -1369,7 +1376,7 @@ function RepriseTab({ standalone, user }) {
   const handleVinScan = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setVinScanning(true); setVinError('');
+    setVinScanning(true); setVinError(''); setTrimOverride('');
     const fd = new FormData();
     fd.append('file', file);
     try {
@@ -1377,7 +1384,13 @@ function RepriseTab({ standalone, user }) {
       const data = await r.json();
       if (data.success && data.vin) {
         up('vin', data.vin);
-        if (data.specs) setVinSpecs(data.specs);
+        if (data.specs) {
+          setVinSpecs(data.specs);
+          const rawTrim = data.specs?.trim || '';
+          if (rawTrim.includes(',') || rawTrim.includes('/')) {
+            setVinNhtsaTrims(rawTrim.split(/[,/]/).map(t => t.trim()).filter(Boolean));
+          } else { setVinNhtsaTrims([]); }
+        }
       } else {
         setVinError(data.error || 'VIN non detecte');
         if (data.partial) up('vin', data.partial);
@@ -1528,9 +1541,23 @@ function RepriseTab({ standalone, user }) {
         {vinSpecs && (
           <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--surface-secondary)', borderRadius: '6px', border: '1px solid var(--border)' }}>
             <div style={rs.row}>
-              {[['Marque', vinSpecs.make], ['Modele', vinSpecs.model], ['Annee', vinSpecs.year], ['Trim', vinSpecs.trim], ['Moteur', `${vinSpecs.engine_cylinders||''}cyl ${vinSpecs.engine_displacement||''}L ${vinSpecs.engine_hp||''}HP`.trim()], ['Motricite', vinSpecs.drive_type]].filter(([,v]) => v && v !== 'cyl LHP').map(([l,v]) => (
+              {[['Marque', vinSpecs.make], ['Modele', vinSpecs.model], ['Annee', vinSpecs.year], ['Moteur', `${vinSpecs.engine_cylinders||''}cyl ${vinSpecs.engine_displacement||''}L ${vinSpecs.engine_hp||''}HP`.trim()], ['Motricite', vinSpecs.drive_type]].filter(([,v]) => v && v !== 'cyl LHP').map(([l,v]) => (
                 <div key={l} style={{ padding: '6px 0', borderBottom: '1px solid var(--border)' }}><span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{l}</span><br/><span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{v}</span></div>
               ))}
+              <div style={{ padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Trim</span><br/>
+                <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{trimOverride || vinSpecs.trim || '—'}</span>
+                <div style={{ marginTop: '0.5rem' }}>
+                  <select style={{ ...rs.input, fontSize: '0.8rem', padding: '6px 10px' }} value={trimOverride || vinSpecs.trim || ''} onChange={e => setTrimOverride(e.target.value)}>
+                    <option value={vinSpecs.trim || ''}>{vinSpecs.trim || '—'} (detecte)</option>
+                    {vinNhtsaTrims.filter(t => t !== vinSpecs.trim).map(t => <option key={t} value={t}>{t}</option>)}
+                    <option value="__custom">Autre...</option>
+                  </select>
+                  {trimOverride === '__custom' && (
+                    <input style={{ ...rs.input, fontSize: '0.8rem', padding: '6px 10px', marginTop: '0.4rem' }} placeholder="Entrer le trim exact" onChange={e => { if (e.target.value) setTrimOverride(e.target.value); }} autoFocus />
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         )}
