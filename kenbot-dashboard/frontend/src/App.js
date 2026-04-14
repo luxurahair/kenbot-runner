@@ -1636,8 +1636,8 @@ function RepriseTab({ standalone, user }) {
 // EVALUATIONS TAB — Admin list + detail
 // ═══════════════════════════════════════════════════
 
-const EVAL_STATUTS = ['NOUVEAU', 'EN EVALUATION', 'OFFRE ENVOYEE', 'ACCEPTE', 'REFUSE'];
-const EVAL_COLORS = { 'NOUVEAU': '#3b82f6', 'EN EVALUATION': '#eab308', 'OFFRE ENVOYEE': '#a855f7', 'ACCEPTE': '#22c55e', 'REFUSE': '#ef4444' };
+const EVAL_STATUTS = ['EN ATTENTE', 'PRIX RECU', 'REPRIS', 'REFUSE'];
+const EVAL_COLORS = { 'EN ATTENTE': '#eab308', 'PRIX RECU': '#0ea5e9', 'REPRIS': '#22c55e', 'REFUSE': '#ef4444', 'NOUVEAU': '#3b82f6' };
 
 function EvaluationsTab({ user }) {
   const [evals, setEvals] = useState([]);
@@ -1645,6 +1645,9 @@ function EvaluationsTab({ user }) {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPrix, setShowPrix] = useState(false);
+  const [prixVal, setPrixVal] = useState('');
+  const [users, setUsers] = useState([]);
 
   const fetchEvals = useCallback(async () => {
     setLoading(true);
@@ -1654,62 +1657,97 @@ function EvaluationsTab({ user }) {
       if (user?.role) params.push(`role=${user.role}`);
       if (user?.username) params.push(`created_by=${user.username}`);
       if (params.length) url += '?' + params.join('&');
-      const r = await fetch(url);
-      const d = await r.json();
-      setEvals(d.evaluations || []);
+      const r = await fetch(url); const d = await r.json(); setEvals(d.evaluations || []);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, [user]);
 
   useEffect(() => { fetchEvals(); }, [fetchEvals]);
+  useEffect(() => { fetch(`${API}/api/users`).then(r => r.json()).then(d => setUsers(d.users || [])).catch(() => {}); }, []);
 
   const updateStatus = async (id, st) => {
     await fetch(`${API}/api/evaluations/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: st }) });
-    fetchEvals();
-    if (selected?.id === id) setSelected(p => ({ ...p, status: st }));
+    fetchEvals(); if (selected?.id === id) setSelected(p => ({ ...p, status: st }));
+  };
+
+  const submitPrix = async () => {
+    if (!prixVal || !selected) return;
+    const conseillerUser = users.find(u => u.username === selected.created_by);
+    await fetch(`${API}/api/evaluations/${selected.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prix_reprise: parseFloat(prixVal.replace(/[^0-9.]/g, '')), prix_par: user?.name || 'Directeur', notify_email: conseillerUser?.email || '' })
+    });
+    setShowPrix(false); setPrixVal(''); fetchEvals();
+    setSelected(p => ({ ...p, prix_reprise: parseFloat(prixVal.replace(/[^0-9.]/g, '')), prix_par: user?.name, status: 'PRIX RECU' }));
   };
 
   const filtered = evals.filter(e => filter === 'all' || e.status === filter).filter(e => {
-    if (!search) return true;
-    const s = search.toLowerCase();
+    if (!search) return true; const s = search.toLowerCase();
     return (e.client_name||'').toLowerCase().includes(s) || (e.vin||'').toLowerCase().includes(s) || (e.make||'').toLowerCase().includes(s) || (e.model||'').toLowerCase().includes(s);
   });
 
   const evalBadge = (st) => {
     const c = EVAL_COLORS[st] || '#6b7280';
-    return <span style={{ padding: '2px 10px', borderRadius: '10px', fontSize: '0.7rem', fontWeight: 700, background: `${c}20`, color: c, border: `1px solid ${c}40` }}>{st}</span>;
+    return <span style={{ padding: '3px 12px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 700, background: `${c}25`, color: c, border: `1px solid ${c}40` }}>{st}</span>;
   };
 
   if (selected) {
-    const ev = selected;
-    const fd = ev.form_data || {};
+    const ev = selected; const fd = ev.form_data || {};
+    const canSetPrice = user?.role === 'admin' || user?.role === 'directeur';
     return (
       <div data-testid="eval-detail">
-        <button onClick={() => setSelected(null)} style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 14px', cursor: 'pointer', background: 'var(--surface)', fontSize: '0.8rem', marginBottom: '1rem' }}>← Retour</button>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h3 style={{ fontFamily: 'Chivo', fontWeight: 700 }}>{ev.year} {ev.make} {ev.model} {ev.trim}</h3>
-          {evalBadge(ev.status)}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
-          {[['VIN', ev.vin], ['Moteur', ev.engine], ['Motricite', ev.drive_type], ['Km', ev.km ? `${Number(ev.km).toLocaleString('fr-CA')} km` : null], ['Etat', ev.etat_general], ['Couleur ext.', fd.couleur_ext]].filter(([,v]) => v).map(([l,v]) => (
-            <div key={l} style={{ background: 'var(--surface-secondary)', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)' }}><div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>{l}</div><div style={{ fontWeight: 600, fontSize: '0.9rem', marginTop: '2px', wordBreak: 'break-all' }}>{v}</div></div>
+        <button onClick={() => setSelected(null)} style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 14px', cursor: 'pointer', background: 'var(--surface)', fontSize: '0.8rem', marginBottom: '1rem' }}>&#8592; Retour a la liste</button>
+        {ev.photos?.length > 0 && (
+          <div style={{ position: 'relative', borderRadius: '8px', overflow: 'hidden', marginBottom: '1rem', maxHeight: '250px' }}>
+            <img src={ev.photos[0]} alt="" style={{ width: '100%', height: '250px', objectFit: 'cover' }} />
+            <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent, rgba(0,0,0,0.8))', padding: '1.5rem 1rem 1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>{evalBadge(ev.status)}<span style={{ background: 'rgba(0,0,0,0.6)', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', color: '#fff' }}>{ev.photos.length} photos</span></div>
+            </div>
+          </div>
+        )}
+        <h3 style={{ fontFamily: 'Chivo', fontWeight: 700, fontSize: '1.2rem', marginBottom: '0.25rem' }}>{ev.year} {ev.make} {ev.model} {ev.trim}</h3>
+        {ev.vin && <div style={{ fontFamily: 'IBM Plex Mono', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>{ev.vin}</div>}
+        {ev.prix_reprise ? (
+          <div style={{ background: 'var(--accent-green-subtle)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
+            <div style={{ fontSize: '0.7rem', color: 'var(--accent-green)', textTransform: 'uppercase', fontWeight: 600 }}>Prix de reprise</div>
+            <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--accent-green)' }}>{Number(ev.prix_reprise).toLocaleString('fr-CA')} $</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Par {ev.prix_par}</div>
+          </div>
+        ) : canSetPrice && (
+          <div style={{ background: 'var(--surface)', border: '2px dashed var(--accent-blue)', borderRadius: '8px', padding: '1rem', marginBottom: '1rem', textAlign: 'center' }}>
+            {showPrix ? (
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <input style={{ flex: 1, minWidth: '120px', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '1rem', fontWeight: 700 }} placeholder="Prix $" value={prixVal} onChange={e => setPrixVal(e.target.value)} autoFocus onKeyDown={e => e.key === 'Enter' && submitPrix()} />
+                <button onClick={submitPrix} style={{ padding: '10px 20px', borderRadius: '6px', border: 'none', background: 'var(--accent-green)', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Confirmer</button>
+                <button onClick={() => setShowPrix(false)} style={{ padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-secondary)', cursor: 'pointer' }}>Annuler</button>
+              </div>
+            ) : (
+              <button onClick={() => setShowPrix(true)} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', background: 'var(--accent-blue)', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem' }}>Donner un prix de reprise</button>
+            )}
+          </div>
+        )}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.5rem', marginBottom: '1rem' }}>
+          {[['KM', ev.km ? `${Number(ev.km).toLocaleString('fr-CA')} km` : null], ['Moteur', ev.engine], ['Motricite', ev.drive_type], ['Etat', ev.etat_general], ['Couleur', fd.couleur_ext], ['Cles', fd.nombre_cles]].filter(([,v]) => v).map(([l,v]) => (
+            <div key={l} style={{ background: 'var(--surface-secondary)', padding: '0.6rem', borderRadius: '6px', border: '1px solid var(--border)' }}><div style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>{l}</div><div style={{ fontWeight: 600, fontSize: '0.85rem', marginTop: '2px' }}>{v}</div></div>
           ))}
         </div>
-        {fd.options?.length > 0 && <div style={{ marginBottom: '1rem' }}><strong style={{ fontSize: '0.8rem' }}>Options ({fd.options.length}):</strong><div style={{ marginTop: '0.5rem' }}>{fd.options.map(o => <span key={o} style={{ display: 'inline-block', padding: '3px 10px', margin: '2px', borderRadius: '4px', fontSize: '0.75rem', background: 'var(--accent-blue-subtle)', color: 'var(--accent-blue)', border: '1px solid var(--accent-blue)' }}>{o}</span>)}</div></div>}
-        {ev.photos?.length > 0 && <div style={{ marginBottom: '1rem' }}><strong style={{ fontSize: '0.8rem' }}>Photos ({ev.photos.length}):</strong><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '0.5rem', marginTop: '0.5rem' }}>{ev.photos.map((u,i) => <img key={i} src={u} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => window.open(u)} />)}</div></div>}
+        {ev.photos?.length > 0 && <div style={{ marginBottom: '1rem' }}><strong style={{ fontSize: '0.8rem' }}>Photos ({ev.photos.length})</strong><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '0.5rem', marginTop: '0.5rem' }}>{ev.photos.map((u,i) => <img key={i} src={u} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => window.open(u)} />)}</div></div>}
+        {fd.options?.length > 0 && <div style={{ marginBottom: '1rem' }}><strong style={{ fontSize: '0.8rem' }}>Options ({fd.options.length})</strong><div style={{ marginTop: '0.4rem' }}>{fd.options.map(o => <span key={o} style={{ display: 'inline-block', padding: '3px 8px', margin: '2px', borderRadius: '4px', fontSize: '0.7rem', background: 'var(--accent-blue-subtle)', color: 'var(--accent-blue)' }}>{o}</span>)}</div></div>}
+        {fd.dommages?.length > 0 && <div style={{ marginBottom: '1rem' }}><strong style={{ fontSize: '0.8rem' }}>Dommages ({fd.dommages.length})</strong><div style={{ marginTop: '0.4rem' }}>{fd.dommages.map(d => <span key={d} style={{ display: 'inline-block', padding: '3px 8px', margin: '2px', borderRadius: '4px', fontSize: '0.7rem', background: 'var(--accent-red-subtle)', color: 'var(--accent-red)' }}>{d}</span>)}</div></div>}
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
-          <strong style={{ fontSize: '0.85rem' }}>Client</strong>
-          <div style={{ marginTop: '0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>{ev.client_name}</div>
+          <strong style={{ fontSize: '0.8rem' }}>Client</strong>
+          <div style={{ marginTop: '0.5rem', fontWeight: 600 }}>{ev.client_name}</div>
           <div style={{ color: 'var(--accent-blue)', fontSize: '0.85rem' }}><a href={`tel:${ev.client_phone}`} style={{ color: 'inherit' }}>{ev.client_phone}</a></div>
-          {ev.client_email && <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{ev.client_email}</div>}
+          {ev.client_email && <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{ev.client_email}</div>}
+          {fd.institution && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>Financement: {fd.institution} — {fd.versement} {fd.frequence_versement}</div>}
         </div>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem' }}>
-          <strong style={{ fontSize: '0.85rem' }}>Changer le statut</strong>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.75rem' }}>
-            {EVAL_STATUTS.map(st => <button key={st} onClick={() => updateStatus(ev.id, st)} style={{ padding: '6px 14px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', border: ev.status === st ? `2px solid ${EVAL_COLORS[st]}` : '1px solid var(--border)', background: ev.status === st ? `${EVAL_COLORS[st]}20` : 'var(--surface)', color: EVAL_COLORS[st] || 'var(--text-secondary)' }} data-testid={`eval-status-${st}`}>{st}</button>)}
+          <strong style={{ fontSize: '0.8rem' }}>Statut</strong>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.5rem' }}>
+            {EVAL_STATUTS.map(st => <button key={st} onClick={() => updateStatus(ev.id, st)} style={{ padding: '8px 16px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', border: ev.status === st ? `2px solid ${EVAL_COLORS[st]}` : '1px solid var(--border)', background: ev.status === st ? `${EVAL_COLORS[st]}25` : 'var(--surface)', color: EVAL_COLORS[st] || 'var(--text-secondary)' }}>{st}</button>)}
           </div>
         </div>
-        <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '1rem' }}>Recu le {new Date(ev.created_at).toLocaleString('fr-CA')}</div>
+        <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '1rem' }}>Recu le {new Date(ev.created_at).toLocaleString('fr-CA')}{ev.created_by && ev.created_by !== 'client' ? ` — par ${ev.created_by}` : ' — par le client'}</div>
       </div>
     );
   }
@@ -1718,29 +1756,41 @@ function EvaluationsTab({ user }) {
     <div data-testid="evaluations-tab">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
         <h2 className="section-title" style={{ margin: 0 }}>Evaluations</h2>
-        <button onClick={fetchEvals} disabled={loading} style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 14px', cursor: 'pointer', background: 'var(--surface)', fontSize: '0.8rem' }} data-testid="eval-refresh">{loading ? '...' : 'Rafraichir'}</button>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{evals.length} total</span>
+          <button onClick={fetchEvals} disabled={loading} style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 14px', cursor: 'pointer', background: 'var(--surface)', fontSize: '0.8rem' }} data-testid="eval-refresh">{loading ? '...' : 'Rafraichir'}</button>
+        </div>
       </div>
-      <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-        {[{ l: 'Toutes', id: 'all', c: evals.length }, ...EVAL_STATUTS.map(s => ({ l: s, id: s, c: evals.filter(e => e.status === s).length }))].map(f => (
-          <button key={f.id} onClick={() => setFilter(f.id)} style={{ padding: '4px 12px', borderRadius: '12px', border: 'none', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, background: filter === f.id ? 'var(--accent-blue)' : 'var(--surface-secondary)', color: filter === f.id ? '#fff' : 'var(--text-secondary)' }} data-testid={`eval-filter-${f.id}`}>{f.l} ({f.c})</button>
-        ))}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', marginBottom: '1rem' }}>
+        {EVAL_STATUTS.map(st => {
+          const count = evals.filter(e => e.status === st).length; const c = EVAL_COLORS[st];
+          return <div key={st} style={{ background: `${c}10`, border: `1px solid ${c}30`, borderRadius: '6px', padding: '0.6rem', textAlign: 'center', cursor: 'pointer' }} onClick={() => setFilter(filter === st ? 'all' : st)}>
+            <div style={{ fontSize: '1.2rem', fontWeight: 700, color: c }}>{count}</div>
+            <div style={{ fontSize: '0.6rem', fontWeight: 600, color: c, textTransform: 'uppercase' }}>{st}</div>
+          </div>;
+        })}
       </div>
-      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher VIN, client..." style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', marginBottom: '1rem', fontFamily: 'IBM Plex Sans' }} data-testid="eval-search" />
+      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher VIN, client, marque..." style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', marginBottom: '1rem' }} data-testid="eval-search" />
       {filtered.length === 0 ? (
         <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem' }}>{evals.length === 0 ? 'Aucune evaluation' : 'Aucun resultat'}</div>
       ) : (
-        <div className="eval-list">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.75rem' }}>
           {filtered.map(ev => (
-            <div key={ev.id} onClick={() => setSelected(ev)} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem', marginBottom: '0.5rem', cursor: 'pointer' }} className="eval-card" data-testid={`eval-card-${ev.id}`}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.4rem' }}>
-                <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{ev.year} {ev.make} {ev.model} {ev.trim}</div>
-                {evalBadge(ev.status)}
+            <div key={ev.id} onClick={() => setSelected(ev)} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden', cursor: 'pointer', transition: 'border-color 0.15s' }} className="eval-card" data-testid={`eval-card-${ev.id}`}>
+              <div style={{ position: 'relative', height: '150px', background: '#111' }}>
+                {ev.photos?.length > 0 ? <img src={ev.photos[0]} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#333', fontSize: '0.8rem' }}>Aucune photo</div>}
+                <div style={{ position: 'absolute', bottom: '8px', left: '8px' }}>{evalBadge(ev.status)}</div>
+                {ev.photos?.length > 0 && <div style={{ position: 'absolute', bottom: '8px', right: '8px', background: 'rgba(0,0,0,0.6)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', color: '#fff' }}>{ev.photos.length}</div>}
               </div>
-              <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem', color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
-                <span>{ev.client_name}</span>
-                <span>{ev.client_phone}</span>
-                {ev.km && <span>{Number(ev.km).toLocaleString('fr-CA')} km</span>}
-                <span>{new Date(ev.created_at).toLocaleDateString('fr-CA', { month: 'short', day: 'numeric' })}</span>
+              <div style={{ padding: '0.75rem' }}>
+                <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{ev.year} {ev.make} {ev.model}</div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontFamily: 'IBM Plex Mono' }}>{ev.vin}</div>
+                {ev.km && <div style={{ fontWeight: 700, marginTop: '0.2rem' }}>{Number(ev.km).toLocaleString('fr-CA')} km</div>}
+                <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.4rem', paddingTop: '0.4rem', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                  <span><strong>{ev.client_name}</strong></span>
+                  <a href={`tel:${ev.client_phone}`} style={{ color: 'var(--accent-blue)' }} onClick={e => e.stopPropagation()}>{ev.client_phone}</a>
+                </div>
+                {ev.prix_reprise && <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.3rem', paddingTop: '0.3rem', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}><span style={{ color: 'var(--text-secondary)' }}>Dir: {ev.prix_par}</span><span style={{ color: 'var(--accent-green)', fontWeight: 700 }}>{Number(ev.prix_reprise).toLocaleString('fr-CA')} $</span></div>}
               </div>
             </div>
           ))}
@@ -1749,6 +1799,7 @@ function EvaluationsTab({ user }) {
     </div>
   );
 }
+
 
 
 // ═══════════════════════════════════════════════════

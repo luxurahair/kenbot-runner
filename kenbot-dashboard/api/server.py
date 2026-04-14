@@ -1336,16 +1336,80 @@ async def reprise_get_evaluation(eval_id: str):
     except Exception as e:
         raise HTTPException(500, str(e))
 
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASS = os.environ.get("SMTP_PASS", "")
+SMTP_FROM = os.environ.get("SMTP_FROM", SMTP_USER)
+
+def send_email(to_email, subject, body_html):
+    if not SMTP_USER or not SMTP_PASS:
+        logging.warning("SMTP not configured, skipping email")
+        return False
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"Kennebec Reprise <{SMTP_FROM}>"
+        msg["To"] = to_email
+        msg.attach(MIMEText(body_html, "html"))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASS)
+            s.sendmail(SMTP_FROM, to_email, msg.as_string())
+        logging.info(f"Email sent to {to_email}: {subject}")
+        return True
+    except Exception as e:
+        logging.error(f"Email error: {e}")
+        return False
+
+
 @api_router.patch("/evaluations/{eval_id}")
 async def reprise_update_evaluation(eval_id: str, data: dict):
     from fastapi import HTTPException
     if not sb:
         raise HTTPException(500, "DB non connectee")
-    allowed = {"status", "admin_notes", "offre_montant"}
+    allowed = {"status", "admin_notes", "offre_montant", "prix_reprise", "prix_par", "wholesale_emails"}
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    # If directeur sets a price, auto-change status and notify
+    prix = data.get("prix_reprise")
+    prix_par = data.get("prix_par", "")
+    notify_email = data.get("notify_email", "")
+
+    if prix and prix_par:
+        update["status"] = "PRIX RECU"
+        update["prix_reprise"] = prix
+        update["prix_par"] = prix_par
+        update["prix_date"] = datetime.now(timezone.utc).isoformat()
+
     try:
         sb.table("evaluations").update(update).eq("id", eval_id).execute()
+
+        # Send email notification to conseiller if price was set
+        if prix and notify_email:
+            result = sb.table("evaluations").select("*").eq("id", eval_id).limit(1).execute()
+            ev = result.data[0] if result.data else {}
+            subject = f"Prix de reprise recu — {ev.get('year','')} {ev.get('make','')} {ev.get('model','')}"
+            body = f"""
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+              <h2 style="color:#0ea5e9">Prix de reprise recu</h2>
+              <p>Le directeur <strong>{prix_par}</strong> a evalue le vehicule:</p>
+              <table style="width:100%;border-collapse:collapse;margin:1rem 0">
+                <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666">Vehicule</td><td style="padding:8px;border-bottom:1px solid #eee;font-weight:bold">{ev.get('year','')} {ev.get('make','')} {ev.get('model','')} {ev.get('trim','')}</td></tr>
+                <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666">VIN</td><td style="padding:8px;border-bottom:1px solid #eee;font-family:monospace">{ev.get('vin','')}</td></tr>
+                <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666">Client</td><td style="padding:8px;border-bottom:1px solid #eee">{ev.get('client_name','')}</td></tr>
+                <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666">KM</td><td style="padding:8px;border-bottom:1px solid #eee">{ev.get('km','')} km</td></tr>
+                <tr style="background:#f0f9ff"><td style="padding:12px;color:#0ea5e9;font-weight:bold">PRIX DE REPRISE</td><td style="padding:12px;font-size:1.3em;font-weight:bold;color:#0ea5e9">{prix} $</td></tr>
+              </table>
+              <p style="color:#666;font-size:0.85em">Kennebec Dodge Chrysler — 418-222-3939</p>
+            </div>"""
+            send_email(notify_email, subject, body)
+
         return {"success": True}
     except Exception as e:
         raise HTTPException(500, str(e))
