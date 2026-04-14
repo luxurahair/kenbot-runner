@@ -73,7 +73,6 @@ function LoginPage({ onLogin }) {
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '2rem', width: '100%', maxWidth: '360px' }} data-testid="login-form">
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '36px', marginBottom: '1rem', opacity: 0.8 }} />
           <div style={{ fontFamily: 'Chivo', fontWeight: 900, fontSize: '1.25rem', color: '#0ea5e9', letterSpacing: '0.15em' }}>KENBOT</div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Connexion au tableau de bord</div>
         </div>
@@ -217,7 +216,6 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
     <>
       <header className="header" data-testid="header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '28px', objectFit: 'contain' }} />
           <span className="header-logo" data-testid="header-logo">KENBOT</span>
           <span className={`status-dot ${connected ? '' : 'offline'}`} data-testid="status-dot" title={connected ? 'Supabase connecte' : 'Supabase deconnecte'} />
         </div>
@@ -1473,10 +1471,7 @@ function RepriseTab({ standalone, user }) {
     <div style={{ padding: '0' }} data-testid="reprise-tab">
       {!standalone && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '24px', objectFit: 'contain', opacity: 0.7 }} />
-            <h2 className="section-title" style={{ margin: 0 }}>Evaluation de reprise</h2>
-          </div>
+          <h2 className="section-title" style={{ margin: 0 }}>Evaluation de reprise</h2>
           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{secIdx + 1}/{REPRISE_SECTIONS.length}</span>
         </div>
       )}
@@ -1639,15 +1634,48 @@ function RepriseTab({ standalone, user }) {
 const EVAL_STATUTS = ['EN ATTENTE', 'PRIX RECU', 'REPRIS', 'REFUSE'];
 const EVAL_COLORS = { 'EN ATTENTE': '#eab308', 'PRIX RECU': '#0ea5e9', 'REPRIS': '#22c55e', 'REFUSE': '#ef4444', 'NOUVEAU': '#3b82f6' };
 
+// Brand logos mapping
+const BRAND_LOGOS = {
+  'JEEP': 'https://www.carlogos.org/car-logos/jeep-logo.png',
+  'DODGE': 'https://www.carlogos.org/car-logos/dodge-logo.png',
+  'CHRYSLER': 'https://www.carlogos.org/car-logos/chrysler-logo.png',
+  'RAM': 'https://www.carlogos.org/car-logos/ram-logo.png',
+  'VOLKSWAGEN': 'https://www.carlogos.org/car-logos/volkswagen-logo.png',
+  'TOYOTA': 'https://www.carlogos.org/car-logos/toyota-logo.png',
+  'HONDA': 'https://www.carlogos.org/car-logos/honda-logo.png',
+  'FORD': 'https://www.carlogos.org/car-logos/ford-logo.png',
+  'CHEVROLET': 'https://www.carlogos.org/car-logos/chevrolet-logo.png',
+  'GMC': 'https://www.carlogos.org/car-logos/gmc-logo.png',
+  'HYUNDAI': 'https://www.carlogos.org/car-logos/hyundai-logo.png',
+  'KIA': 'https://www.carlogos.org/car-logos/kia-logo.png',
+  'NISSAN': 'https://www.carlogos.org/car-logos/nissan-logo.png',
+  'MAZDA': 'https://www.carlogos.org/car-logos/mazda-logo.png',
+  'SUBARU': 'https://www.carlogos.org/car-logos/subaru-logo.png',
+  'BMW': 'https://www.carlogos.org/car-logos/bmw-logo.png',
+  'MERCEDES-BENZ': 'https://www.carlogos.org/car-logos/mercedes-benz-logo.png',
+  'AUDI': 'https://www.carlogos.org/car-logos/audi-logo.png',
+  'BUICK': 'https://www.carlogos.org/car-logos/buick-logo.png',
+  'CADILLAC': 'https://www.carlogos.org/car-logos/cadillac-logo.png',
+  'LINCOLN': 'https://www.carlogos.org/car-logos/lincoln-logo.png',
+  'MITSUBISHI': 'https://www.carlogos.org/car-logos/mitsubishi-logo.png',
+  'FIAT': 'https://www.carlogos.org/car-logos/fiat-logo.png',
+};
+
 function EvaluationsTab({ user }) {
   const [evals, setEvals] = useState([]);
   const [selected, setSelected] = useState(null);
+  const [view, setView] = useState('list'); // list | stats
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [searchVin, setSearchVin] = useState('');
+  const [searchPhone, setSearchPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPrix, setShowPrix] = useState(false);
   const [prixVal, setPrixVal] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
   const [users, setUsers] = useState([]);
+  const [page, setPage] = useState(1);
+  const perPage = 20;
 
   const fetchEvals = useCallback(async () => {
     setLoading(true);
@@ -1672,134 +1700,279 @@ function EvaluationsTab({ user }) {
 
   const submitPrix = async () => {
     if (!prixVal || !selected) return;
-    const conseillerUser = users.find(u => u.username === selected.created_by);
+    const cu = users.find(u => u.username === selected.created_by);
     await fetch(`${API}/api/evaluations/${selected.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prix_reprise: parseFloat(prixVal.replace(/[^0-9.]/g, '')), prix_par: user?.name || 'Directeur', notify_email: conseillerUser?.email || '' })
+      body: JSON.stringify({ prix_reprise: parseFloat(prixVal.replace(/[^0-9.]/g, '')), prix_par: user?.name || 'Directeur', notify_email: cu?.email || '' })
     });
     setShowPrix(false); setPrixVal(''); fetchEvals();
     setSelected(p => ({ ...p, prix_reprise: parseFloat(prixVal.replace(/[^0-9.]/g, '')), prix_par: user?.name, status: 'PRIX RECU' }));
   };
 
-  const filtered = evals.filter(e => filter === 'all' || e.status === filter).filter(e => {
-    if (!search) return true; const s = search.toLowerCase();
-    return (e.client_name||'').toLowerCase().includes(s) || (e.vin||'').toLowerCase().includes(s) || (e.make||'').toLowerCase().includes(s) || (e.model||'').toLowerCase().includes(s);
+  const statusCounts = {
+    all: evals.length,
+    'EN ATTENTE': evals.filter(e => e.status === 'EN ATTENTE' || e.status === 'NOUVEAU').length,
+    'PRIX RECU': evals.filter(e => e.status === 'PRIX RECU').length,
+    'REPRIS': evals.filter(e => e.status === 'REPRIS').length,
+    'REFUSE': evals.filter(e => e.status === 'REFUSE').length,
+  };
+  const pctReprise = evals.length > 0 ? ((statusCounts['REPRIS'] / evals.length) * 100).toFixed(1) : '0';
+
+  const filtered = evals.filter(e => {
+    if (filter === 'EN ATTENTE') return e.status === 'EN ATTENTE' || e.status === 'NOUVEAU';
+    if (filter !== 'all') return e.status === filter;
+    return true;
+  }).filter(e => {
+    if (search) { const s = search.toLowerCase(); if (!(e.client_name||'').toLowerCase().includes(s)) return false; }
+    if (searchVin) { if (!(e.vin||'').toLowerCase().includes(searchVin.toLowerCase())) return false; }
+    if (searchPhone) { if (!(e.client_phone||'').includes(searchPhone)) return false; }
+    return true;
   });
 
+  const totalPages = Math.ceil(filtered.length / perPage);
+  const paginated = filtered.slice((page - 1) * perPage, page * perPage);
+
+  const getBrandLogo = (make) => BRAND_LOGOS[(make||'').toUpperCase()] || null;
+
   const evalBadge = (st) => {
-    const c = EVAL_COLORS[st] || '#6b7280';
-    return <span style={{ padding: '3px 12px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 700, background: `${c}25`, color: c, border: `1px solid ${c}40` }}>{st}</span>;
+    const colors = { 'EN ATTENTE': '#eab308', 'NOUVEAU': '#eab308', 'PRIX RECU': '#0ea5e9', 'REPRIS': '#22c55e', 'REFUSE': '#ef4444' };
+    const c = colors[st] || '#6b7280';
+    return <span style={{ padding: '3px 10px', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 700, background: `${c}18`, color: c, border: `1px solid ${c}30`, textTransform: 'uppercase', letterSpacing: '0.03em' }}>{st === 'NOUVEAU' ? 'EN ATTENTE' : st}</span>;
   };
 
+  // ── DETAIL VIEW ──
   if (selected) {
     const ev = selected; const fd = ev.form_data || {};
     const canSetPrice = user?.role === 'admin' || user?.role === 'directeur';
+    const logo = getBrandLogo(ev.make);
     return (
-      <div data-testid="eval-detail">
-        <button onClick={() => setSelected(null)} style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 14px', cursor: 'pointer', background: 'var(--surface)', fontSize: '0.8rem', marginBottom: '1rem' }}>&#8592; Retour a la liste</button>
-        {ev.photos?.length > 0 && (
-          <div style={{ position: 'relative', borderRadius: '8px', overflow: 'hidden', marginBottom: '1rem', maxHeight: '250px' }}>
-            <img src={ev.photos[0]} alt="" style={{ width: '100%', height: '250px', objectFit: 'cover' }} />
-            <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent, rgba(0,0,0,0.8))', padding: '1.5rem 1rem 1rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>{evalBadge(ev.status)}<span style={{ background: 'rgba(0,0,0,0.6)', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', color: '#fff' }}>{ev.photos.length} photos</span></div>
+      <div data-testid="eval-detail" className="eval-detail-view">
+        <button onClick={() => setSelected(null)} className="eval-back-btn">&#8592; Retour a la liste</button>
+        <div className="eval-detail-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            {logo && <img src={logo} alt={ev.make} style={{ height: '36px', objectFit: 'contain' }} onError={e => e.target.style.display='none'} />}
+            <div>
+              <h3 className="eval-detail-title">{ev.year} {ev.make} {ev.model} {ev.trim}</h3>
+              {ev.vin && <div className="eval-detail-vin">{ev.vin}</div>}
             </div>
           </div>
+          {evalBadge(ev.status)}
+        </div>
+
+        {ev.photos?.length > 0 && (
+          <div className="eval-photos-hero">
+            <img src={ev.photos[0]} alt="" className="eval-hero-img" />
+            <span className="eval-photo-count">{ev.photos.length} photos</span>
+          </div>
         )}
-        <h3 style={{ fontFamily: 'Chivo', fontWeight: 700, fontSize: '1.2rem', marginBottom: '0.25rem' }}>{ev.year} {ev.make} {ev.model} {ev.trim}</h3>
-        {ev.vin && <div style={{ fontFamily: 'IBM Plex Mono', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>{ev.vin}</div>}
+
         {ev.prix_reprise ? (
-          <div style={{ background: 'var(--accent-green-subtle)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
-            <div style={{ fontSize: '0.7rem', color: 'var(--accent-green)', textTransform: 'uppercase', fontWeight: 600 }}>Prix de reprise</div>
-            <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--accent-green)' }}>{Number(ev.prix_reprise).toLocaleString('fr-CA')} $</div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Par {ev.prix_par}</div>
+          <div className="eval-prix-box eval-prix-set">
+            <div className="eval-prix-label">Prix de reprise</div>
+            <div className="eval-prix-value">{Number(ev.prix_reprise).toLocaleString('fr-CA')} $</div>
+            <div className="eval-prix-by">Evalue par {ev.prix_par}</div>
           </div>
         ) : canSetPrice && (
-          <div style={{ background: 'var(--surface)', border: '2px dashed var(--accent-blue)', borderRadius: '8px', padding: '1rem', marginBottom: '1rem', textAlign: 'center' }}>
+          <div className="eval-prix-box eval-prix-empty">
             {showPrix ? (
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                <input style={{ flex: 1, minWidth: '120px', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '1rem', fontWeight: 700 }} placeholder="Prix $" value={prixVal} onChange={e => setPrixVal(e.target.value)} autoFocus onKeyDown={e => e.key === 'Enter' && submitPrix()} />
-                <button onClick={submitPrix} style={{ padding: '10px 20px', borderRadius: '6px', border: 'none', background: 'var(--accent-green)', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Confirmer</button>
-                <button onClick={() => setShowPrix(false)} style={{ padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-secondary)', cursor: 'pointer' }}>Annuler</button>
+                <input className="eval-prix-input" placeholder="Montant $" value={prixVal} onChange={e => setPrixVal(e.target.value)} autoFocus onKeyDown={e => e.key === 'Enter' && submitPrix()} />
+                <button className="eval-btn-green" onClick={submitPrix}>Confirmer</button>
+                <button className="eval-btn-ghost" onClick={() => setShowPrix(false)}>Annuler</button>
               </div>
             ) : (
-              <button onClick={() => setShowPrix(true)} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', background: 'var(--accent-blue)', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem' }}>Donner un prix de reprise</button>
+              <button className="eval-btn-primary" onClick={() => setShowPrix(true)}>Donner un prix de reprise</button>
             )}
           </div>
         )}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.5rem', marginBottom: '1rem' }}>
-          {[['KM', ev.km ? `${Number(ev.km).toLocaleString('fr-CA')} km` : null], ['Moteur', ev.engine], ['Motricite', ev.drive_type], ['Etat', ev.etat_general], ['Couleur', fd.couleur_ext], ['Cles', fd.nombre_cles]].filter(([,v]) => v).map(([l,v]) => (
-            <div key={l} style={{ background: 'var(--surface-secondary)', padding: '0.6rem', borderRadius: '6px', border: '1px solid var(--border)' }}><div style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>{l}</div><div style={{ fontWeight: 600, fontSize: '0.85rem', marginTop: '2px' }}>{v}</div></div>
+
+        <div className="eval-specs-grid">
+          {[['Kilometrage', ev.km ? `${Number(ev.km).toLocaleString('fr-CA')} km` : null], ['Moteur', ev.engine], ['Motricite', ev.drive_type], ['Carburant', ev.fuel_type], ['Etat', ev.etat_general], ['Couleur ext.', fd.couleur_ext], ['Couleur int.', fd.couleur_int], ['Cles', fd.nombre_cles], ['Pare-brise', fd.etat_parebrise]].filter(([,v]) => v).map(([l,v]) => (
+            <div key={l} className="eval-spec-card"><div className="eval-spec-label">{l}</div><div className="eval-spec-value">{v}</div></div>
           ))}
         </div>
-        {ev.photos?.length > 0 && <div style={{ marginBottom: '1rem' }}><strong style={{ fontSize: '0.8rem' }}>Photos ({ev.photos.length})</strong><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '0.5rem', marginTop: '0.5rem' }}>{ev.photos.map((u,i) => <img key={i} src={u} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => window.open(u)} />)}</div></div>}
-        {fd.options?.length > 0 && <div style={{ marginBottom: '1rem' }}><strong style={{ fontSize: '0.8rem' }}>Options ({fd.options.length})</strong><div style={{ marginTop: '0.4rem' }}>{fd.options.map(o => <span key={o} style={{ display: 'inline-block', padding: '3px 8px', margin: '2px', borderRadius: '4px', fontSize: '0.7rem', background: 'var(--accent-blue-subtle)', color: 'var(--accent-blue)' }}>{o}</span>)}</div></div>}
-        {fd.dommages?.length > 0 && <div style={{ marginBottom: '1rem' }}><strong style={{ fontSize: '0.8rem' }}>Dommages ({fd.dommages.length})</strong><div style={{ marginTop: '0.4rem' }}>{fd.dommages.map(d => <span key={d} style={{ display: 'inline-block', padding: '3px 8px', margin: '2px', borderRadius: '4px', fontSize: '0.7rem', background: 'var(--accent-red-subtle)', color: 'var(--accent-red)' }}>{d}</span>)}</div></div>}
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
-          <strong style={{ fontSize: '0.8rem' }}>Client</strong>
-          <div style={{ marginTop: '0.5rem', fontWeight: 600 }}>{ev.client_name}</div>
-          <div style={{ color: 'var(--accent-blue)', fontSize: '0.85rem' }}><a href={`tel:${ev.client_phone}`} style={{ color: 'inherit' }}>{ev.client_phone}</a></div>
-          {ev.client_email && <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{ev.client_email}</div>}
-          {fd.institution && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>Financement: {fd.institution} — {fd.versement} {fd.frequence_versement}</div>}
+
+        {ev.photos?.length > 1 && <div className="eval-section"><div className="eval-section-title">Photos ({ev.photos.length})</div><div className="eval-photos-grid">{ev.photos.map((u,i) => <img key={i} src={u} alt="" className="eval-photo-thumb" onClick={() => window.open(u)} />)}</div></div>}
+        {fd.options?.length > 0 && <div className="eval-section"><div className="eval-section-title">Equipements ({fd.options.length})</div><div className="eval-tags">{fd.options.map(o => <span key={o} className="eval-tag-blue">{o}</span>)}</div></div>}
+        {fd.dommages?.length > 0 && <div className="eval-section"><div className="eval-section-title">Dommages ({fd.dommages.length})</div><div className="eval-tags">{fd.dommages.map(d => <span key={d} className="eval-tag-red">{d}</span>)}</div></div>}
+
+        <div className="eval-section eval-client-box">
+          <div className="eval-section-title">Client</div>
+          <div className="eval-client-name">{ev.client_name}</div>
+          <a href={`tel:${ev.client_phone}`} className="eval-client-phone">{ev.client_phone}</a>
+          {ev.client_email && <div className="eval-client-email">{ev.client_email}</div>}
+          {fd.institution && <div className="eval-client-finance">Financement: {fd.institution} — {fd.versement} / {fd.frequence_versement}</div>}
+          {fd.provenance && <div className="eval-client-source">Source: {fd.provenance}</div>}
         </div>
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem' }}>
-          <strong style={{ fontSize: '0.8rem' }}>Statut</strong>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.5rem' }}>
-            {EVAL_STATUTS.map(st => <button key={st} onClick={() => updateStatus(ev.id, st)} style={{ padding: '8px 16px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', border: ev.status === st ? `2px solid ${EVAL_COLORS[st]}` : '1px solid var(--border)', background: ev.status === st ? `${EVAL_COLORS[st]}25` : 'var(--surface)', color: EVAL_COLORS[st] || 'var(--text-secondary)' }}>{st}</button>)}
+
+        {fd.commentaires && <div className="eval-section"><div className="eval-section-title">Notes</div><p className="eval-notes">{fd.commentaires}</p></div>}
+
+        <div className="eval-section">
+          <div className="eval-section-title">Changer le statut</div>
+          <div className="eval-status-btns">
+            {EVAL_STATUTS.map(st => <button key={st} onClick={() => updateStatus(ev.id, st)} className={`eval-status-btn ${ev.status === st ? 'active' : ''}`} style={{ '--sc': EVAL_COLORS[st] || '#6b7280' }}>{st}</button>)}
           </div>
         </div>
-        <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '1rem' }}>Recu le {new Date(ev.created_at).toLocaleString('fr-CA')}{ev.created_by && ev.created_by !== 'client' ? ` — par ${ev.created_by}` : ' — par le client'}</div>
+        <div className="eval-footer-meta">Recu le {new Date(ev.created_at).toLocaleString('fr-CA')}{ev.created_by && ev.created_by !== 'client' ? ` — par ${ev.created_by}` : ' — soumis par le client'}</div>
       </div>
     );
   }
 
+  // ── STATS VIEW ──
+  if (view === 'stats') {
+    const repris = evals.filter(e => e.status === 'REPRIS');
+    const perdus = evals.filter(e => e.status === 'REFUSE');
+    const modelCount = (arr) => {
+      const m = {};
+      arr.forEach(e => { const k = `${e.model} ${e.year}`; m[k] = m[k] || { model: k, make: e.make, count: 0, total: 0 }; m[k].count++; if (e.prix_reprise) m[k].total += Number(e.prix_reprise); });
+      return Object.values(m).sort((a,b) => b.count - a.count).slice(0,5);
+    };
+    return (
+      <div data-testid="eval-stats">
+        <div className="eval-top-bar">
+          <h2 className="eval-page-title">Statistiques des evaluations</h2>
+          <div className="eval-view-toggle">
+            <button onClick={() => setView('stats')} className="eval-view-btn active">Stats</button>
+            <button onClick={() => setView('list')} className="eval-view-btn">Liste</button>
+            <button className="eval-btn-primary" onClick={() => setView('list')}>Nouvelle evaluation</button>
+          </div>
+        </div>
+        <div className="eval-stat-cards">
+          <div className="eval-stat-card"><div className="eval-stat-sublabel">Total des evaluations</div><div className="eval-stat-big">{evals.length}</div><span className="eval-stat-link" onClick={() => { setView('list'); setFilter('all'); }}>Voir les evaluations</span></div>
+          <div className="eval-stat-card" style={{ borderTop: '3px solid #eab308' }}><div className="eval-stat-sublabel">Evaluations {evalBadge('EN ATTENTE')}</div><div className="eval-stat-big">{statusCounts['EN ATTENTE']}</div><span className="eval-stat-link" onClick={() => { setView('list'); setFilter('EN ATTENTE'); }}>Voir en attente</span></div>
+          <div className="eval-stat-card" style={{ borderTop: '3px solid #22c55e' }}><div className="eval-stat-sublabel">Vehicules {evalBadge('REPRIS')}</div><div className="eval-stat-big">{statusCounts['REPRIS']}</div><span className="eval-stat-link" onClick={() => { setView('list'); setFilter('REPRIS'); }}>Voir reprises</span></div>
+          <div className="eval-stat-card" style={{ borderTop: '3px solid #ef4444' }}><div className="eval-stat-sublabel">Vehicules {evalBadge('REFUSE')}</div><div className="eval-stat-big">{statusCounts['REFUSE']}</div><span className="eval-stat-link" onClick={() => { setView('list'); setFilter('REFUSE'); }}>Voir perdus</span></div>
+        </div>
+        <div className="eval-stat-row">
+          <div className="eval-stat-pct-card"><div className="eval-stat-sublabel">Pourcentage de reprise</div><div className="eval-stat-pct">{pctReprise}%</div></div>
+          <div className="eval-stat-pct-card"><div className="eval-stat-sublabel">Prix moyen reprise</div><div className="eval-stat-pct">{repris.length > 0 ? Math.round(repris.reduce((s,e) => s + Number(e.prix_reprise||0), 0) / repris.length).toLocaleString('fr-CA') : '0'} $</div></div>
+        </div>
+        <div className="eval-tables-row">
+          <div className="eval-table-card"><div className="eval-section-title">Top 5 modeles repris</div>
+            <table className="eval-mini-table"><thead><tr><th>Modele</th><th>Qte</th><th>Moy. $</th></tr></thead><tbody>
+              {modelCount(repris).map(m => <tr key={m.model}><td><strong>{m.model}</strong><br/><span style={{fontSize:'0.7rem',color:'var(--text-secondary)'}}>{m.make}</span></td><td>{m.count}</td><td>{m.total > 0 ? Math.round(m.total/m.count).toLocaleString('fr-CA')+' $' : '—'}</td></tr>)}
+              {modelCount(repris).length === 0 && <tr><td colSpan={3} style={{textAlign:'center',color:'var(--text-secondary)'}}>Aucune donnee</td></tr>}
+            </tbody></table>
+          </div>
+          <div className="eval-table-card"><div className="eval-section-title">Top 5 modeles perdus</div>
+            <table className="eval-mini-table"><thead><tr><th>Modele</th><th>Qte</th><th>Moy. $</th></tr></thead><tbody>
+              {modelCount(perdus).map(m => <tr key={m.model}><td><strong>{m.model}</strong><br/><span style={{fontSize:'0.7rem',color:'var(--text-secondary)'}}>{m.make}</span></td><td>{m.count}</td><td>{m.total > 0 ? Math.round(m.total/m.count).toLocaleString('fr-CA')+' $' : '—'}</td></tr>)}
+              {modelCount(perdus).length === 0 && <tr><td colSpan={3} style={{textAlign:'center',color:'var(--text-secondary)'}}>Aucune donnee</td></tr>}
+            </tbody></table>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── LIST VIEW (Torque-style table) ──
   return (
-    <div data-testid="evaluations-tab">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
-        <h2 className="section-title" style={{ margin: 0 }}>Evaluations</h2>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{evals.length} total</span>
-          <button onClick={fetchEvals} disabled={loading} style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 14px', cursor: 'pointer', background: 'var(--surface)', fontSize: '0.8rem' }} data-testid="eval-refresh">{loading ? '...' : 'Rafraichir'}</button>
+    <div data-testid="evaluations-tab" className="eval-container">
+      <div className="eval-top-bar">
+        <h2 className="eval-page-title">Liste des evaluations</h2>
+        <div className="eval-view-toggle">
+          <button onClick={() => setView('stats')} className="eval-view-btn">Stats</button>
+          <button onClick={() => setView('list')} className="eval-view-btn active">Liste</button>
+          <button className="eval-btn-filter" onClick={() => setShowFilters(!showFilters)}>{showFilters ? 'Masquer filtres' : 'Filtrer'}</button>
+          <button className="eval-btn-primary" onClick={fetchEvals}>{loading ? '...' : 'Rafraichir'}</button>
         </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', marginBottom: '1rem' }}>
-        {EVAL_STATUTS.map(st => {
-          const count = evals.filter(e => e.status === st).length; const c = EVAL_COLORS[st];
-          return <div key={st} style={{ background: `${c}10`, border: `1px solid ${c}30`, borderRadius: '6px', padding: '0.6rem', textAlign: 'center', cursor: 'pointer' }} onClick={() => setFilter(filter === st ? 'all' : st)}>
-            <div style={{ fontSize: '1.2rem', fontWeight: 700, color: c }}>{count}</div>
-            <div style={{ fontSize: '0.6rem', fontWeight: 600, color: c, textTransform: 'uppercase' }}>{st}</div>
-          </div>;
-        })}
+
+      {/* Filter tabs */}
+      <div className="eval-filter-tabs">
+        {[
+          { id: 'all', label: 'Toutes', count: statusCounts.all },
+          { id: 'EN ATTENTE', label: 'En attente', count: statusCounts['EN ATTENTE'] },
+          { id: 'PRIX RECU', label: 'Prix recu', count: statusCounts['PRIX RECU'] },
+          { id: 'REPRIS', label: 'Repris', count: statusCounts['REPRIS'] },
+          { id: 'REFUSE', label: 'Perdu', count: statusCounts['REFUSE'] },
+        ].map(f => (
+          <button key={f.id} onClick={() => { setFilter(f.id); setPage(1); }} className={`eval-filter-tab ${filter === f.id ? 'active' : ''}`}>
+            {f.label} <span className="eval-filter-count">{f.count}</span>
+          </button>
+        ))}
       </div>
-      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher VIN, client, marque..." style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', marginBottom: '1rem' }} data-testid="eval-search" />
-      {filtered.length === 0 ? (
-        <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem' }}>{evals.length === 0 ? 'Aucune evaluation' : 'Aucun resultat'}</div>
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.75rem' }}>
-          {filtered.map(ev => (
-            <div key={ev.id} onClick={() => setSelected(ev)} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden', cursor: 'pointer', transition: 'border-color 0.15s' }} className="eval-card" data-testid={`eval-card-${ev.id}`}>
-              <div style={{ position: 'relative', height: '150px', background: '#111' }}>
-                {ev.photos?.length > 0 ? <img src={ev.photos[0]} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#333', fontSize: '0.8rem' }}>Aucune photo</div>}
-                <div style={{ position: 'absolute', bottom: '8px', left: '8px' }}>{evalBadge(ev.status)}</div>
-                {ev.photos?.length > 0 && <div style={{ position: 'absolute', bottom: '8px', right: '8px', background: 'rgba(0,0,0,0.6)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', color: '#fff' }}>{ev.photos.length}</div>}
+
+      <div className="eval-content-row">
+        {/* Main table */}
+        <div className="eval-table-main">
+          {paginated.length === 0 ? (
+            <div className="eval-empty">{evals.length === 0 ? 'Aucune evaluation' : 'Aucun resultat pour ce filtre'}</div>
+          ) : (
+            <>
+              <div className="table-wrap">
+                <table className="eval-table" data-testid="eval-table">
+                  <thead><tr>
+                    <th>Date</th><th>Vehicule</th><th>Client</th><th>Valeurs</th><th>Statut</th><th></th>
+                  </tr></thead>
+                  <tbody>
+                    {paginated.map(ev => {
+                      const logo = getBrandLogo(ev.make);
+                      return (
+                        <tr key={ev.id} onClick={() => setSelected(ev)} className="eval-row" data-testid={`eval-row-${ev.id}`}>
+                          <td className="eval-td-date">{new Date(ev.created_at).toLocaleDateString('fr-CA', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
+                          <td className="eval-td-vehicle">
+                            <div className="eval-vehicle-info">
+                              {ev.photos?.length > 0 && <span className="eval-photo-badge">{ev.photos.length}</span>}
+                              {logo && <img src={logo} alt="" className="eval-brand-logo" onError={e => e.target.style.display='none'} />}
+                              <div>
+                                <div className="eval-v-name">{ev.make} {ev.model}</div>
+                                <div className="eval-v-year">{ev.year} {ev.trim}</div>
+                                <div className="eval-v-km">{ev.km ? `${Number(ev.km).toLocaleString('fr-CA')} KM` : ''}</div>
+                                <div className="eval-v-vin">{ev.vin}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="eval-td-client">
+                            <div className="eval-c-name">{ev.client_name}</div>
+                            <div className="eval-c-phone">{ev.client_phone}</div>
+                            {ev.form_data?.provenance && <div className="eval-c-src">{ev.form_data.provenance}</div>}
+                          </td>
+                          <td className="eval-td-values">
+                            {ev.prix_reprise ? <div className="eval-val-prix">{Number(ev.prix_reprise).toLocaleString('fr-CA')} $</div> : <div className="eval-val-empty">—</div>}
+                          </td>
+                          <td className="eval-td-status">{evalBadge(ev.status)}</td>
+                          <td className="eval-td-actions" onClick={e => e.stopPropagation()}>
+                            <button className="eval-action-btn" title="Voir" onClick={() => setSelected(ev)}>&#9998;</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-              <div style={{ padding: '0.75rem' }}>
-                <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{ev.year} {ev.make} {ev.model}</div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontFamily: 'IBM Plex Mono' }}>{ev.vin}</div>
-                {ev.km && <div style={{ fontWeight: 700, marginTop: '0.2rem' }}>{Number(ev.km).toLocaleString('fr-CA')} km</div>}
-                <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.4rem', paddingTop: '0.4rem', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
-                  <span><strong>{ev.client_name}</strong></span>
-                  <a href={`tel:${ev.client_phone}`} style={{ color: 'var(--accent-blue)' }} onClick={e => e.stopPropagation()}>{ev.client_phone}</a>
+              <div className="eval-pagination">
+                <span className="eval-page-info">Resultats {(page-1)*perPage+1} a {Math.min(page*perPage, filtered.length)} de {filtered.length}</span>
+                <div className="eval-page-btns">
+                  <button disabled={page<=1} onClick={() => setPage(1)} className="eval-page-btn">&laquo;</button>
+                  <button disabled={page<=1} onClick={() => setPage(p=>p-1)} className="eval-page-btn">&lsaquo;</button>
+                  {Array.from({length: Math.min(totalPages, 5)}, (_, i) => {
+                    const p = page <= 3 ? i + 1 : page + i - 2;
+                    if (p < 1 || p > totalPages) return null;
+                    return <button key={p} onClick={() => setPage(p)} className={`eval-page-btn ${page === p ? 'active' : ''}`}>{p}</button>;
+                  })}
+                  <button disabled={page>=totalPages} onClick={() => setPage(p=>p+1)} className="eval-page-btn">&rsaquo;</button>
+                  <button disabled={page>=totalPages} onClick={() => setPage(totalPages)} className="eval-page-btn">&raquo;</button>
                 </div>
-                {ev.prix_reprise && <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.3rem', paddingTop: '0.3rem', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}><span style={{ color: 'var(--text-secondary)' }}>Dir: {ev.prix_par}</span><span style={{ color: 'var(--accent-green)', fontWeight: 700 }}>{Number(ev.prix_reprise).toLocaleString('fr-CA')} $</span></div>}
               </div>
-            </div>
-          ))}
+            </>
+          )}
         </div>
-      )}
+
+        {/* Right filter panel */}
+        {showFilters && (
+          <div className="eval-filter-panel">
+            <div className="eval-filter-title">Filtrer les evaluations</div>
+            <div className="eval-filter-field"><label>Recherche par NIV</label><input value={searchVin} onChange={e => { setSearchVin(e.target.value); setPage(1); }} placeholder="" /></div>
+            <div className="eval-filter-field"><label>Nom ou prenom du client</label><input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} placeholder="" /></div>
+            <div className="eval-filter-field"><label>Telephone du client</label><input value={searchPhone} onChange={e => { setSearchPhone(e.target.value); setPage(1); }} placeholder="" /></div>
+            <button className="eval-btn-ghost" style={{width:'100%',marginTop:'0.75rem'}} onClick={() => { setSearch(''); setSearchVin(''); setSearchPhone(''); setFilter('all'); setPage(1); }}>Reinitialiser</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
-
 
 
 // ═══════════════════════════════════════════════════
