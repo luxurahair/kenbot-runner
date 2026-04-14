@@ -123,8 +123,9 @@ def get_dealer_footer(
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append("🚘 ON REPREND TOUT VOS ECHANGES!")
-    lines.append("👉 Obtenez votre evaluation en ligne:")
-    lines.append("🔗 https://kenbot-dashboard-five.vercel.app/reprise")
+    lines.append("")
+    lines.append("📋 J'evalue ton echange → Clique ici:")
+    lines.append("👉 https://kenbot-dashboard-five.vercel.app/reprise")
     lines.append("")
 
     if include_hashtags:
