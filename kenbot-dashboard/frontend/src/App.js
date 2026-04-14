@@ -1387,12 +1387,19 @@ function RepriseTab({ standalone, user }) {
     e.target.value = '';
   };
 
+  const compressImage = (file, maxW = 1200, q = 0.7) => new Promise((res) => {
+    const img = new Image();
+    img.onload = () => { const c = document.createElement('canvas'); let w = img.width, h = img.height; if (w > maxW) { h = (h * maxW) / w; w = maxW; } c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h); c.toBlob(b => res(b), 'image/jpeg', q); };
+    img.src = URL.createObjectURL(file);
+  });
+
   const handlePhotos = async (e) => {
     const files = Array.from(e.target.files).slice(0, 10 - photos.length);
     if (!files.length) return;
     setUploading(true);
     for (const file of files) {
-      const fd = new FormData(); fd.append('file', file); fd.append('evaluation_id', evalId);
+      const compressed = await compressImage(file);
+      const fd = new FormData(); fd.append('file', new File([compressed], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' })); fd.append('evaluation_id', evalId);
       try {
         const r = await fetch(`${API}/api/evaluations/upload-photo`, { method: 'POST', body: fd });
         if (r.ok) { const d = await r.json(); setPhotos(p => [...p, { url: d.url, name: file.name }]); }
