@@ -121,6 +121,11 @@ def get_dealer_footer(
 
     lines.append("🤝 Financement disponible — on trouve une solution ensemble.")
     lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append("🚘 ON REPREND TOUT VOS ECHANGES!")
+    lines.append("👉 Obtenez votre evaluation en ligne:")
+    lines.append("🔗 https://kenbot-dashboard-five.vercel.app/reprise")
+    lines.append("")
 
     if include_hashtags:
         if hashtags:

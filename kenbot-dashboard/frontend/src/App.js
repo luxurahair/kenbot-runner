@@ -30,8 +30,11 @@ function StandaloneReprise() {
     <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
       <header style={{ background: '#09090b', borderBottom: '1px solid #27272a', padding: '1rem 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem' }}>
         <img src="/kennebec-logo.png" alt="Kennebec" style={{ height: '32px', objectFit: 'contain' }} />
-        <span style={{ fontFamily: 'Chivo', fontWeight: 900, fontSize: '1rem', color: '#0ea5e9', letterSpacing: '0.1em' }}>REPRISE</span>
       </header>
+      <div style={{ textAlign: 'center', padding: '1.5rem 1rem 0' }}>
+        <h1 style={{ fontFamily: 'Chivo', fontWeight: 900, fontSize: '1.4rem', color: '#0ea5e9', margin: '0 0 0.25rem' }}>ON REPREND TOUT VOS ECHANGES!</h1>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: 0 }}>Obtenez votre evaluation gratuite en quelques minutes</p>
+      </div>
       <div style={{ maxWidth: '800px', margin: '0 auto', padding: '1.5rem' }}>
         <RepriseTab standalone />
       </div>
