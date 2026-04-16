@@ -266,14 +266,14 @@ def test_footer_et_reprise():
         failed += 1
         print("  [FAIL] Double footer")
 
-    # 4d: Lien /reprise present dans le footer
+    # 4d: Lien reprise present dans le footer (tinyurl)
     footer = get_dealer_footer()
-    if "kenbot-dashboard-five.vercel.app/reprise" in footer:
+    if "tinyurl.com/EvaluerMonAuto" in footer:
         passed += 1
-        print(f"  [OK] Lien /reprise present dans footer")
+        print(f"  [OK] Lien tinyurl.com/EvaluerMonAuto present dans footer")
     else:
         failed += 1
-        print(f"  [FAIL] Lien /reprise ABSENT du footer!")
+        print(f"  [FAIL] Lien reprise ABSENT du footer!")
         print(f"         Footer actuel: {footer[-200:]}")
 
     # 4e: Texte "J'evalue ton echange" present

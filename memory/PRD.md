@@ -7,7 +7,7 @@
 ### 1. kenbot-runner (Bot FB — Render Cron) - EN PRODUCTION
 - Scrape Kennebec > IA > Facebook
 - Detection par STOCK: NEW / SOLD / UNSOLD / PRICE_CHANGED / PHOTOS_ADDED / CLEANUP
-- Footer pro Daniel Giroux + hashtags SEO dynamiques + lien /reprise
+- Footer pro Daniel Giroux + hashtags SEO dynamiques + lien tinyurl.com/EvaluerMonAuto
 - Nettoyeur post-IA (_clean_ai_output)
 - PROFIL DU VEHICULE + CARACTERISTIQUES CERTIFIEES
 - Meta compare (site vs FB) en fin de run
@@ -26,19 +26,11 @@
 - Module centralise: pipeline/ (client.py, prompts.py, generator.py, cliches.py)
 - ZERO modification a runner_cron_prod.py
 - Backup complet: backup_2026-04-16/
-- Tests: 60/60 (classifier, vehicle_intelligence, cliches, footer+reprise, SOLD, UNSOLD, VIN NHTSA, meta_compare, NO_PHOTO)
-- Lamborghini Huracan + Urus ajoutes a vehicle_intelligence.py
-- Compatibilite arriere: TOUS les imports existants fonctionnent
-
-## Pipeline Architecture
-```
-pipeline/
-├── __init__.py          # Module description
-├── client.py            # Client OpenAI centralise (singleton)
-├── prompts.py           # Prompts/system messages centralises
-├── generator.py         # Fonctions generation unifiees
-└── cliches.py           # Filtre anti-cliches (source unique)
-```
+- Tests: 80/80 (avec API OpenAI)
+- 10 styles d'intro differents (nouvelle arrivage, question, chiffre, rarete, prix, etc.)
+- Interdiction stricte de commencer par experience/passion vendeur
+- 43+ cliches interdits (dont "faire tourner les tetes", "passionne depuis...")
+- Lien reprise: tinyurl.com/EvaluerMonAuto
 
 ## Events du Cron
 - NEW: Nouveau vehicule
@@ -52,9 +44,11 @@ pipeline/
 - Health endpoint /api/health ajoute au backend
 - SMTP notifications testees et fonctionnelles
 - Pipeline OpenAI unifie: pipeline/ module
-- Tests complets 60/60: tests/test_pipeline_generation.py
+- Tests complets 80/80: tests/test_pipeline_generation.py
 - Backup complet: backup_2026-04-16/ (9 fichiers + STRUCTURE.md)
 - Lamborghini Huracan/Urus ajoutes a vehicle_intelligence.py
+- Intros variees et centrees sur le vehicule (plus de "passionne depuis 20 ans")
+- Lien reprise tinyurl.com/EvaluerMonAuto dans le footer
 
 ## Backlog
 - P0: Deployer via "Save to Github" + ajouter secrets GitHub (SMTP_USER, SMTP_PASS)
