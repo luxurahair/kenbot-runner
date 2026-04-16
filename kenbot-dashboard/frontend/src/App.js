@@ -2307,7 +2307,7 @@ function UtilisateursTab() {
   const [loading, setLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [editUser, setEditUser] = useState(null);
-  const [newUser, setNewUser] = useState({ username: '', password: '', name: '', role: 'conseiller' });
+  const [newUser, setNewUser] = useState({ username: '', password: '', name: '', role: 'conseiller', email: '' });
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -2321,7 +2321,7 @@ function UtilisateursTab() {
     if (!newUser.username || !newUser.password || !newUser.name) return;
     try {
       const r = await fetch(`${API}/api/users`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newUser) });
-      if (r.ok) { setShowAdd(false); setNewUser({ username: '', password: '', name: '', role: 'conseiller' }); fetchUsers(); }
+      if (r.ok) { setShowAdd(false); setNewUser({ username: '', password: '', name: '', role: 'conseiller', email: '' }); fetchUsers(); }
     } catch (e) { console.error(e); }
   };
 
@@ -2359,6 +2359,7 @@ function UtilisateursTab() {
             <div><label style={is.label}>Nom complet</label><input style={is.input} value={newUser.name} onChange={e => setNewUser(n => ({ ...n, name: e.target.value }))} data-testid="new-user-name" /></div>
             <div><label style={is.label}>Identifiant</label><input style={is.input} value={newUser.username} onChange={e => setNewUser(n => ({ ...n, username: e.target.value.toLowerCase().replace(/\s/g, '') }))} data-testid="new-user-username" /></div>
             <div><label style={is.label}>Mot de passe</label><input style={is.input} value={newUser.password} onChange={e => setNewUser(n => ({ ...n, password: e.target.value }))} data-testid="new-user-password" /></div>
+            <div><label style={is.label}>Courriel</label><input style={is.input} type="email" value={newUser.email} onChange={e => setNewUser(n => ({ ...n, email: e.target.value }))} data-testid="new-user-email" placeholder="pour reinitialiser le mot de passe" /></div>
             <div><label style={is.label}>Role</label><select style={is.input} value={newUser.role} onChange={e => setNewUser(n => ({ ...n, role: e.target.value }))} data-testid="new-user-role"><option value="conseiller">Conseiller</option><option value="directeur">Directeur des ventes</option><option value="admin">Administrateur</option></select></div>
           </div>
           <div style={{ marginTop: '1rem' }}><button style={is.btn} onClick={handleAdd} data-testid="save-user-btn">Creer</button></div>
@@ -2370,6 +2371,7 @@ function UtilisateursTab() {
           <div style={{ fontFamily: 'Chivo', fontWeight: 700, marginBottom: '0.75rem' }}>Modifier: {editUser.username}</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
             <div><label style={is.label}>Nom</label><input style={is.input} value={editUser.changes.name || ''} onChange={e => setEditUser(u => ({ ...u, changes: { ...u.changes, name: e.target.value } }))} /></div>
+            <div><label style={is.label}>Courriel</label><input style={is.input} type="email" value={editUser.changes.email || ''} onChange={e => setEditUser(u => ({ ...u, changes: { ...u.changes, email: e.target.value } }))} placeholder="email@exemple.com" /></div>
             <div><label style={is.label}>Nouveau mot de passe</label><input style={is.input} value={editUser.changes.password || ''} onChange={e => setEditUser(u => ({ ...u, changes: { ...u.changes, password: e.target.value } }))} placeholder="Laisser vide pour ne pas changer" /></div>
             <div><label style={is.label}>Role</label><select style={is.input} value={editUser.changes.role || ''} onChange={e => setEditUser(u => ({ ...u, changes: { ...u.changes, role: e.target.value } }))}><option value="conseiller">Conseiller</option><option value="directeur">Directeur</option><option value="admin">Admin</option></select></div>
           </div>
@@ -2388,10 +2390,11 @@ function UtilisateursTab() {
               <div>
                 <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>{u.name}</div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontFamily: 'IBM Plex Mono' }}>{u.username}</div>
+                {u.email && <div style={{ fontSize: '0.7rem', color: '#0ea5e9' }}>{u.email}</div>}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <span style={{ padding: '3px 10px', borderRadius: '10px', fontSize: '0.7rem', fontWeight: 700, background: `${rc}20`, color: rc, border: `1px solid ${rc}40` }}>{ROLE_LABELS[u.role] || u.role}</span>
-                <button onClick={() => setEditUser({ username: u.username, changes: { name: u.name, role: u.role, password: '' } })} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', padding: '4px 10px', fontSize: '0.7rem', cursor: 'pointer', color: 'var(--text-secondary)' }}>Modifier</button>
+                <button onClick={() => setEditUser({ username: u.username, changes: { name: u.name, role: u.role, email: u.email || '', password: '' } })} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', padding: '4px 10px', fontSize: '0.7rem', cursor: 'pointer', color: 'var(--text-secondary)' }}>Modifier</button>
                 {u.username !== 'admin' && <button onClick={() => handleDelete(u.username)} style={{ background: 'none', border: '1px solid var(--accent-red)', borderRadius: '4px', padding: '4px 10px', fontSize: '0.7rem', cursor: 'pointer', color: 'var(--accent-red)' }}>Supprimer</button>}
               </div>
             </div>

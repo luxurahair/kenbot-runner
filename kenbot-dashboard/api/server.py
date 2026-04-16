@@ -1297,7 +1297,7 @@ async def create_user(data: dict):
     if role not in ("admin", "directeur", "conseiller"):
         raise HTTPException(400, "Role invalide")
     try:
-        sb.table("dashboard_users").insert({"username": username, "password": password, "name": name, "role": role}).execute()
+        sb.table("dashboard_users").insert({"username": username, "password": password, "name": name, "role": role, "email": (data.get("email") or "").strip()}).execute()
         return {"success": True}
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -1308,7 +1308,7 @@ async def update_user(username: str, data: dict):
     from fastapi import HTTPException
     if not sb:
         raise HTTPException(500, "DB non connectee")
-    allowed = {"password", "name", "role", "active"}
+    allowed = {"password", "name", "role", "active", "email"}
     update = {k: v for k, v in data.items() if k in allowed}
     if not update:
         raise HTTPException(400, "Rien a modifier")
