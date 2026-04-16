@@ -1247,6 +1247,42 @@ async def change_password(data: dict):
         raise HTTPException(500, str(e))
 
 
+@api_router.post("/users/forgot-password")
+async def forgot_password(data: dict):
+    from fastapi import HTTPException
+    import random, string
+    if not sb:
+        raise HTTPException(500, "DB non connectee")
+    username = (data.get("username") or "").strip().lower()
+    if not username:
+        raise HTTPException(400, "username requis")
+    users = get_dashboard_users()
+    if username not in users:
+        return {"success": True, "message": "Si ce compte existe, un courriel a ete envoye."}
+    u = users[username]
+    email = u.get("email", "")
+    if not email:
+        return {"success": False, "message": "Aucun courriel associe a ce compte. Contactez l'administrateur."}
+    temp_pwd = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+    try:
+        sb.table("dashboard_users").update({"password": temp_pwd}).eq("username", username).execute()
+        body = f"""
+        <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:2rem">
+          <h2 style="color:#0284c7">Reinitialisation de mot de passe</h2>
+          <p>Bonjour <strong>{u.get('name', username)}</strong>,</p>
+          <p>Votre mot de passe temporaire est:</p>
+          <div style="background:#f0f9ff;border:2px solid #0284c7;border-radius:8px;padding:1rem;text-align:center;margin:1rem 0">
+            <span style="font-family:monospace;font-size:1.5rem;font-weight:700;color:#0284c7;letter-spacing:2px">{temp_pwd}</span>
+          </div>
+          <p>Connectez-vous et changez votre mot de passe immediatement.</p>
+          <p style="color:#6b7280;font-size:0.85em">Kennebec Dodge Chrysler — 418-222-3939</p>
+        </div>"""
+        send_email(email, "Reinitialisation mot de passe — Kenbot", body)
+        return {"success": True, "message": "Un courriel avec votre nouveau mot de passe a ete envoye."}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @api_router.post("/users")
 async def create_user(data: dict):
     from fastapi import HTTPException

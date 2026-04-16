@@ -188,6 +188,11 @@ function LoginPage({ onLogin }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPwd, setShowPwd] = useState(false);
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotUser, setForgotUser] = useState('');
+  const [forgotMsg, setForgotMsg] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
 
   const handleLogin = async () => {
     setError(''); setLoading(true);
@@ -207,41 +212,54 @@ function LoginPage({ onLogin }) {
     setLoading(false);
   };
 
+  const handleForgot = async () => {
+    if (!forgotUser.trim()) { setForgotMsg('Entrez votre nom d\'utilisateur'); return; }
+    setForgotLoading(true); setForgotMsg('');
+    try {
+      const r = await fetch(`${API}/api/users/forgot-password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: forgotUser.trim() }) });
+      const d = await r.json();
+      setForgotMsg(d.message || 'Courriel envoye.');
+    } catch { setForgotMsg('Erreur reseau'); }
+    setForgotLoading(false);
+  };
+
+  const inputStyle = { width: '100%', padding: '12px 14px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.9rem', fontFamily: 'IBM Plex Sans' };
+
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '2rem', width: '100%', maxWidth: '360px' }} data-testid="login-form">
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
           <div style={{ fontFamily: 'Chivo', fontWeight: 900, fontSize: '1.25rem', color: '#0ea5e9', letterSpacing: '0.15em' }}>KENBOT</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Connexion au tableau de bord</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>{forgotMode ? 'Reinitialiser le mot de passe' : 'Connexion au tableau de bord'}</div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          <input
-            data-testid="login-username"
-            style={{ width: '100%', padding: '12px 14px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.9rem', fontFamily: 'IBM Plex Sans' }}
-            placeholder="Nom d'utilisateur"
-            value={username}
-            onChange={e => setUsername(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleLogin()}
-          />
-          <input
-            data-testid="login-password"
-            type="password"
-            style={{ width: '100%', padding: '12px 14px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.9rem', fontFamily: 'IBM Plex Sans' }}
-            placeholder="Mot de passe"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleLogin()}
-          />
-          {error && <div style={{ color: 'var(--accent-red)', fontSize: '0.8rem' }} data-testid="login-error">{error}</div>}
-          <button
-            data-testid="login-btn"
-            onClick={handleLogin}
-            disabled={loading}
-            style={{ width: '100%', padding: '12px', borderRadius: '6px', border: 'none', background: '#0ea5e9', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', fontFamily: 'IBM Plex Sans' }}
-          >
-            {loading ? '...' : 'Connexion'}
-          </button>
-        </div>
+
+        {forgotMode ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <input data-testid="forgot-username" style={inputStyle} placeholder="Nom d'utilisateur" value={forgotUser} onChange={e => setForgotUser(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleForgot()} />
+            {forgotMsg && <div style={{ fontSize: '0.8rem', color: forgotMsg.includes('envoye') ? '#22c55e' : forgotMsg.includes('Aucun') ? '#eab308' : 'var(--text-secondary)', fontWeight: 600 }}>{forgotMsg}</div>}
+            <button data-testid="forgot-btn" onClick={handleForgot} disabled={forgotLoading} style={{ width: '100%', padding: '12px', borderRadius: '6px', border: 'none', background: '#0ea5e9', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}>
+              {forgotLoading ? '...' : 'Envoyer le mot de passe'}
+            </button>
+            <button onClick={() => { setForgotMode(false); setForgotMsg(''); }} style={{ background: 'none', border: 'none', color: '#0ea5e9', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}>
+              Retour a la connexion
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <input data-testid="login-username" style={inputStyle} placeholder="Nom d'utilisateur" value={username} onChange={e => setUsername(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin()} />
+            <div style={{ position: 'relative' }}>
+              <input data-testid="login-password" type={showPwd ? 'text' : 'password'} style={{ ...inputStyle, paddingRight: '42px' }} placeholder="Mot de passe" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin()} />
+              <button onClick={() => setShowPwd(!showPwd)} type="button" style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.8rem', padding: '4px' }} data-testid="toggle-pwd">{showPwd ? 'Cacher' : 'Voir'}</button>
+            </div>
+            {error && <div style={{ color: 'var(--accent-red)', fontSize: '0.8rem' }} data-testid="login-error">{error}</div>}
+            <button data-testid="login-btn" onClick={handleLogin} disabled={loading} style={{ width: '100%', padding: '12px', borderRadius: '6px', border: 'none', background: '#0ea5e9', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', fontFamily: 'IBM Plex Sans' }}>
+              {loading ? '...' : 'Connexion'}
+            </button>
+            <button onClick={() => setForgotMode(true)} style={{ background: 'none', border: 'none', color: '#0ea5e9', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }} data-testid="forgot-link">
+              Mot de passe oublie?
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -340,6 +358,8 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
   const [pwdConfirm, setPwdConfirm] = useState('');
   const [pwdMsg, setPwdMsg] = useState('');
   const [pwdLoading, setPwdLoading] = useState(false);
+  const [showOld, setShowOld] = useState(false);
+  const [showNew, setShowNew] = useState(false);
 
   const handleChangePassword = async () => {
     setPwdMsg('');
@@ -407,9 +427,17 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '10px', padding: '1.5rem', width: '100%', maxWidth: '380px' }} onClick={e => e.stopPropagation()}>
             <div style={{ fontFamily: 'Chivo', fontWeight: 700, fontSize: '1rem', marginBottom: '1rem' }}>Changer le mot de passe</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <input type="password" placeholder="Mot de passe actuel" value={pwdOld} onChange={e => setPwdOld(e.target.value)} style={{ padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
-              <input type="password" placeholder="Nouveau mot de passe" value={pwdNew} onChange={e => setPwdNew(e.target.value)} style={{ padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
-              <input type="password" placeholder="Confirmer le nouveau" value={pwdConfirm} onChange={e => setPwdConfirm(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleChangePassword()} style={{ padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
+              <div style={{ position: 'relative' }}>
+                <input type={showOld ? 'text' : 'password'} placeholder="Mot de passe actuel" value={pwdOld} onChange={e => setPwdOld(e.target.value)} style={{ width: '100%', padding: '10px 42px 10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
+                <button type="button" onClick={() => setShowOld(!showOld)} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{showOld ? 'Cacher' : 'Voir'}</button>
+              </div>
+              <div style={{ position: 'relative' }}>
+                <input type={showNew ? 'text' : 'password'} placeholder="Nouveau mot de passe" value={pwdNew} onChange={e => setPwdNew(e.target.value)} style={{ width: '100%', padding: '10px 42px 10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
+                <button type="button" onClick={() => setShowNew(!showNew)} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{showNew ? 'Cacher' : 'Voir'}</button>
+              </div>
+              <div style={{ position: 'relative' }}>
+                <input type={showNew ? 'text' : 'password'} placeholder="Confirmer le nouveau" value={pwdConfirm} onChange={e => setPwdConfirm(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleChangePassword()} style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
+              </div>
               {pwdMsg && <div style={{ fontSize: '0.8rem', color: pwdMsg.includes('succes') ? '#22c55e' : '#ef4444', fontWeight: 600 }}>{pwdMsg}</div>}
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button onClick={handleChangePassword} disabled={pwdLoading} className="eval-btn-primary" style={{ flex: 1 }}>{pwdLoading ? '...' : 'Changer'}</button>
