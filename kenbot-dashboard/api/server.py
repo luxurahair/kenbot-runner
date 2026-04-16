@@ -1431,6 +1431,17 @@ async def reprise_upload_photo(file: UploadFile = File(...), evaluation_id: str 
     except Exception as e:
         raise HTTPException(500, str(e))
 
+# ─── Health Check ───
+@api_router.get("/health")
+async def health_check():
+    status = {
+        "status": "ok",
+        "service": "kenbot-dashboard-api",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "supabase": "connected" if sb else "disconnected"
+    }
+    return status
+
 app.include_router(api_router)
 
 # ═══ WHOLESALE ENDPOINTS ═══

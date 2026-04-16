@@ -1,0 +1,236 @@
+# =====================================================
+# KENBOT AUTO-REPAIR - GitHub Actions Workflow
+# =====================================================
+# Ce workflow surveille l'API kenbot-dashboard toutes les
+# 5 minutes et declenche une reparation automatique si
+# necessaire.
+#
+# FONCTIONNALITES:
+# - Health check toutes les 5 minutes
+# - Auto-repair si service down
+# - Rollback automatique si deploiement echoue
+# - Notifications email via SMTP
+# - Applicable a tous les repos luxurahair
+#
+# SECRETS GITHUB REQUIS:
+# - SMTP_USER: info@luxuradistribution.com
+# - SMTP_PASS: App password Gmail
+# - ADMIN_EMAIL: Email destinataire des alertes
+
+name: "\U0001F527 Kenbot Auto-Repair Monitor"
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action a effectuer'
+        required: true
+        default: 'check'
+        type: choice
+        options:
+          - check
+          - repair
+          - rollback
+          - status
+
+env:
+  SERVICE_URL: https://kenbot-dashboard-api.onrender.com
+  SERVICE_NAME: kenbot-dashboard-api
+
+jobs:
+  health-check:
+    name: "\U0001F50D Health Check"
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.check.outputs.status }}
+      needs_repair: ${{ steps.check.outputs.needs_repair }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Health Checks
+        id: check
+        run: |
+          python << 'EOF'
+          import requests
+          import json
+          import os
+
+          SERVICE_URL = os.environ.get('SERVICE_URL', 'https://kenbot-dashboard-api.onrender.com')
+
+          endpoints = [
+              {"path": "/api/health", "name": "Health", "critical": True},
+              {"path": "/api/evaluations", "name": "Evaluations", "critical": True},
+              {"path": "/api/wholesale-contacts", "name": "Wholesale", "critical": False},
+          ]
+
+          results = {"passed": 0, "failed": 0, "critical_failed": False}
+
+          print(f"Checking {SERVICE_URL}")
+          print("=" * 50)
+
+          for ep in endpoints:
+              try:
+                  response = requests.get(f"{SERVICE_URL}{ep['path']}", timeout=30)
+                  if response.status_code == 200:
+                      results["passed"] += 1
+                      print(f"[OK] {ep['name']}: Status {response.status_code}")
+                  else:
+                      results["failed"] += 1
+                      print(f"[FAIL] {ep['name']}: Status {response.status_code}")
+                      if ep["critical"]:
+                          results["critical_failed"] = True
+              except Exception as e:
+                  results["failed"] += 1
+                  print(f"[FAIL] {ep['name']}: {str(e)[:50]}")
+                  if ep["critical"]:
+                      results["critical_failed"] = True
+
+          print("=" * 50)
+
+          if results["failed"] == 0:
+              status = "HEALTHY"
+              needs_repair = "false"
+          elif results["critical_failed"]:
+              status = "DOWN"
+              needs_repair = "true"
+          else:
+              status = "DEGRADED"
+              needs_repair = "false"
+
+          print(f"Status: {status}")
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"status={status}\n")
+              f.write(f"needs_repair={needs_repair}\n")
+          EOF
+
+  auto-repair:
+    name: "\U0001F527 Auto Repair"
+    runs-on: ubuntu-latest
+    needs: health-check
+    if: needs.health-check.outputs.needs_repair == 'true' || github.event.inputs.action == 'repair'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Analyze Error
+        id: analyze
+        run: |
+          echo "Analyzing service errors..."
+
+          ERROR_TEXT=$(curl -s --max-time 10 $SERVICE_URL/api/health 2>&1 || echo "Service unreachable")
+          echo "Error: $ERROR_TEXT"
+
+          if echo "$ERROR_TEXT" | grep -qi "timeout\|connection"; then
+            echo "action=restart" >> $GITHUB_OUTPUT
+          else
+            echo "action=rollback" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Rollback to Stable
+        if: steps.analyze.outputs.action == 'rollback'
+        run: |
+          echo "Rolling back to previous stable commit..."
+
+          STABLE_COMMIT=$(git log --oneline -10 | grep -v "Auto-repair\|fix:" | head -1 | cut -d' ' -f1)
+
+          if [ -n "$STABLE_COMMIT" ]; then
+            echo "Rolling back to $STABLE_COMMIT"
+            git config user.name "Kenbot Auto-Repair"
+            git config user.email "bot@kennebec.auto"
+            git reset --hard $STABLE_COMMIT
+            git push --force
+          else
+            echo "No stable commit found, triggering redeploy..."
+            git config user.name "Kenbot Auto-Repair"
+            git config user.email "bot@kennebec.auto"
+            git commit --allow-empty -m "Auto-repair: trigger redeploy"
+            git push
+          fi
+
+      - name: Trigger Restart
+        if: steps.analyze.outputs.action == 'restart'
+        run: |
+          echo "Triggering service restart..."
+          git config user.name "Kenbot Auto-Repair"
+          git config user.email "bot@kennebec.auto"
+          git commit --allow-empty -m "Auto-repair: trigger restart $(date +%s)"
+          git push
+
+  notify:
+    name: "\U0001F4E7 Send Notification"
+    runs-on: ubuntu-latest
+    needs: [health-check, auto-repair]
+    if: always() && needs.health-check.outputs.status != 'HEALTHY'
+
+    steps:
+      - name: Send Email Notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          secure: true
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: "Kenbot API: ${{ needs.health-check.outputs.status }}"
+          to: ${{ secrets.SMTP_USER }}
+          from: Kenbot Monitor <${{ secrets.SMTP_USER }}>
+          body: |
+            Kenbot Dashboard API Monitor Report
+            =====================================
+
+            Status: ${{ needs.health-check.outputs.status }}
+            Time: ${{ github.event.repository.updated_at }}
+
+            Service: ${{ env.SERVICE_NAME }}
+            URL: ${{ env.SERVICE_URL }}
+
+            Auto-repair triggered: ${{ needs.health-check.outputs.needs_repair }}
+
+            View workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            --
+            Kennebec Auto - Systeme de monitoring automatique
+
+  save-stable:
+    name: "\U0001F4BE Save Stable State"
+    runs-on: ubuntu-latest
+    needs: health-check
+    if: needs.health-check.outputs.status == 'HEALTHY'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Record Stable Commit
+        run: |
+          echo "Service is healthy, recording stable commit..."
+          COMMIT_HASH=$(git rev-parse HEAD)
+          echo $COMMIT_HASH > .last_stable_commit
+
+          if git diff --quiet .last_stable_commit 2>/dev/null; then
+            echo "Stable commit unchanged"
+          else
+            git config user.name "Kenbot Auto-Repair"
+            git config user.email "bot@kennebec.auto"
+            git add .last_stable_commit
+            git commit -m "Record stable commit: ${COMMIT_HASH:0:8}" || echo "No changes"
+            git push || echo "Push skipped"
+          fi
