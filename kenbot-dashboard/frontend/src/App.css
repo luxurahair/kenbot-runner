@@ -1260,8 +1260,21 @@ input:focus, select:focus, textarea:focus {
 
 /* Bouton Wholesale inline */
 .eval-wholesale-btn { background: #a855f720 !important; border-color: #a855f740 !important; color: #a855f7 !important; font-weight: 700; font-size: 0.7rem !important; }
-.eval-wholesale-btn:hover { background: #a855f730 !important; border-color: #a855f7 !important; }
+.eval-wholesale-btn:hover, .eval-wholesale-btn.active { background: #a855f730 !important; border-color: #a855f7 !important; }
 .eval-td-actions { display: flex; gap: 4px; align-items: center; }
+
+/* Wholesale inline dans la liste */
+.eval-ws-inline { margin-top: 8px; padding: 8px; background: var(--surface-secondary, #1a1a2e); border: 1px solid #a855f740; border-radius: 6px; }
+.eval-ws-title { font-size: 0.65rem; font-weight: 700; color: #a855f7; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap; }
+.eval-ws-reply { font-size: 0.6rem; color: var(--text-secondary); font-weight: 400; text-transform: none; }
+.eval-ws-empty { font-size: 0.7rem; color: var(--text-secondary); text-align: center; padding: 4px; }
+.eval-ws-contact { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 0.75rem; cursor: pointer; }
+.eval-ws-contact input[type="checkbox"] { accent-color: #a855f7; width: 14px; height: 14px; }
+.eval-ws-name { color: var(--text-primary, #eee); }
+.eval-ws-sent { color: #22c55e; font-size: 0.65rem; font-weight: 700; margin-left: auto; }
+.eval-ws-send-btn { margin-top: 6px; width: 100%; padding: 5px 10px; border-radius: 4px; border: none; background: #a855f7; color: #fff; font-size: 0.7rem; font-weight: 700; cursor: pointer; }
+.eval-ws-send-btn:hover { background: #9333ea; }
+.eval-ws-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Pagination */
 .eval-pagination { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; margin-top: 0.5rem; border-top: 1px solid var(--border); }

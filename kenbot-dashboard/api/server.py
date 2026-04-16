@@ -1222,7 +1222,29 @@ async def reprise_login(data: dict):
 @api_router.get("/users")
 async def list_users():
     users = get_dashboard_users()
-    return {"users": [{"username": k, "name": v["name"], "role": v["role"]} for k, v in users.items()]}
+    return {"users": [{"username": k, "name": v["name"], "role": v["role"], "email": v.get("email", "")} for k, v in users.items()]}
+
+
+@api_router.post("/users/change-password")
+async def change_password(data: dict):
+    from fastapi import HTTPException
+    if not sb:
+        raise HTTPException(500, "DB non connectee")
+    username = (data.get("username") or "").strip().lower()
+    old_password = (data.get("old_password") or "").strip()
+    new_password = (data.get("new_password") or "").strip()
+    if not username or not old_password or not new_password:
+        raise HTTPException(400, "username, old_password et new_password requis")
+    if len(new_password) < 6:
+        raise HTTPException(400, "Le nouveau mot de passe doit avoir au moins 6 caracteres")
+    users = get_dashboard_users()
+    if username not in users or users[username]["password"] != old_password:
+        raise HTTPException(401, "Mot de passe actuel incorrect")
+    try:
+        sb.table("dashboard_users").update({"password": new_password}).eq("username", username).execute()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @api_router.post("/users")
@@ -1346,7 +1368,7 @@ SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASS = os.environ.get("SMTP_PASS", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", SMTP_USER)
 
-def send_email(to_email, subject, body_html):
+def send_email(to_email, subject, body_html, reply_to=None):
     if not SMTP_USER or not SMTP_PASS:
         logging.warning("SMTP not configured, skipping email")
         return False
@@ -1355,6 +1377,8 @@ def send_email(to_email, subject, body_html):
         msg["Subject"] = subject
         msg["From"] = f"Kennebec Reprise <{SMTP_FROM}>"
         msg["To"] = to_email
+        if reply_to:
+            msg["Reply-To"] = reply_to
         msg.attach(MIMEText(body_html, "html"))
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
             s.starttls()
@@ -1496,6 +1520,7 @@ async def send_wholesale_email(data: dict):
     eval_id = data.get("evaluation_id")
     contact_email = data.get("contact_email")
     contact_name = data.get("contact_name", "")
+    reply_to = data.get("reply_to", "")
     if not eval_id or not contact_email:
         raise HTTPException(400, "evaluation_id et contact_email requis")
     try:
@@ -1511,6 +1536,10 @@ async def send_wholesale_email(data: dict):
         for o in (fd.get("options") or []):
             options_html += f'<span style="display:inline-block;padding:2px 8px;margin:2px;border-radius:4px;background:#f0f9ff;color:#0284c7;font-size:12px">{o}</span>'
         subject = f"Evaluation de reprise — {ev.get('year','')} {ev.get('make','')} {ev.get('model','')} {ev.get('trim','')}"
+        # Get directeur info for reply-to
+        director_line = "Daniel Giroux — 418-222-3939"
+        if reply_to:
+            director_line = f"{reply_to}"
         body = f"""
         <div style="font-family:Arial,sans-serif;max-width:650px;margin:0 auto;background:#f9fafb;padding:2rem;border-radius:10px">
           <div style="text-align:center;margin-bottom:1.5rem">
@@ -1531,11 +1560,11 @@ async def send_wholesale_email(data: dict):
           {f'<div style="margin-bottom:1rem">{photos_html}</div>' if photos_html else ''}
           {f'<div style="margin-bottom:1rem"><strong>Equipements:</strong><br/>{options_html}</div>' if options_html else ''}
           <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:1rem;text-align:center">
-            <p style="color:#6b7280;margin:0 0 0.5rem;font-size:14px">Vous etes interesse? Repondez a ce courriel avec votre offre.</p>
-            <p style="color:#111;font-weight:600;margin:0">Daniel Giroux — 418-222-3939</p>
+            <p style="color:#6b7280;margin:0 0 0.5rem;font-size:14px">Interesse? Repondez directement a ce courriel.</p>
+            <p style="color:#111;font-weight:600;margin:0">Kennebec Dodge Chrysler — 418-222-3939</p>
           </div>
         </div>"""
-        send_email(contact_email, subject, body)
+        send_email(contact_email, subject, body, reply_to=reply_to or None)
         return {"success": True}
     except Exception as e:
         logging.error(f"Wholesale send error: {e}")

@@ -334,6 +334,27 @@ function Dashboard({ user, allowedTabs, onLogout }) {
 
 function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
   const [showRunPanel, setShowRunPanel] = useState(false);
+  const [showPwdModal, setShowPwdModal] = useState(false);
+  const [pwdOld, setPwdOld] = useState('');
+  const [pwdNew, setPwdNew] = useState('');
+  const [pwdConfirm, setPwdConfirm] = useState('');
+  const [pwdMsg, setPwdMsg] = useState('');
+  const [pwdLoading, setPwdLoading] = useState(false);
+
+  const handleChangePassword = async () => {
+    setPwdMsg('');
+    if (!pwdOld || !pwdNew) { setPwdMsg('Remplir tous les champs'); return; }
+    if (pwdNew !== pwdConfirm) { setPwdMsg('Les mots de passe ne correspondent pas'); return; }
+    if (pwdNew.length < 6) { setPwdMsg('Minimum 6 caracteres'); return; }
+    setPwdLoading(true);
+    try {
+      const r = await fetch(`${API}/api/users/change-password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: user?.username, old_password: pwdOld, new_password: pwdNew }) });
+      if (r.ok) { setPwdMsg('Mot de passe change avec succes!'); setPwdOld(''); setPwdNew(''); setPwdConfirm(''); setTimeout(() => setShowPwdModal(false), 1500); }
+      else { const d = await r.json(); setPwdMsg(d.detail || 'Erreur'); }
+    } catch (e) { setPwdMsg('Erreur reseau'); }
+    setPwdLoading(false);
+  };
+
   const allTabs = [
     { id: 'cockpit', label: 'Cockpit' },
     { id: 'compare', label: 'Kennebec vs FB' },
@@ -371,6 +392,9 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
             </button>
           )}
           <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontFamily: 'IBM Plex Mono' }} data-testid="user-name">{user?.name}</span>
+          <button onClick={() => setShowPwdModal(true)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', padding: '4px 10px', fontSize: '0.65rem', color: 'var(--accent-blue)', cursor: 'pointer', fontFamily: 'IBM Plex Sans' }} data-testid="change-pwd-btn">
+            Mot de passe
+          </button>
           <button onClick={onLogout} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', padding: '4px 10px', fontSize: '0.7rem', color: 'var(--text-secondary)', cursor: 'pointer', fontFamily: 'IBM Plex Sans' }} data-testid="logout-btn">
             Deconnexion
           </button>
@@ -378,6 +402,23 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
         </div>
       </header>
       {showRunPanel && <RunPanel onClose={() => setShowRunPanel(false)} />}
+      {showPwdModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1100, display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(4px)' }} onClick={() => setShowPwdModal(false)}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '10px', padding: '1.5rem', width: '100%', maxWidth: '380px' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily: 'Chivo', fontWeight: 700, fontSize: '1rem', marginBottom: '1rem' }}>Changer le mot de passe</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <input type="password" placeholder="Mot de passe actuel" value={pwdOld} onChange={e => setPwdOld(e.target.value)} style={{ padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
+              <input type="password" placeholder="Nouveau mot de passe" value={pwdNew} onChange={e => setPwdNew(e.target.value)} style={{ padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
+              <input type="password" placeholder="Confirmer le nouveau" value={pwdConfirm} onChange={e => setPwdConfirm(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleChangePassword()} style={{ padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
+              {pwdMsg && <div style={{ fontSize: '0.8rem', color: pwdMsg.includes('succes') ? '#22c55e' : '#ef4444', fontWeight: 600 }}>{pwdMsg}</div>}
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button onClick={handleChangePassword} disabled={pwdLoading} className="eval-btn-primary" style={{ flex: 1 }}>{pwdLoading ? '...' : 'Changer'}</button>
+                <button onClick={() => setShowPwdModal(false)} className="eval-btn-ghost" style={{ flex: 1 }}>Annuler</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -1815,7 +1856,17 @@ function EvaluationsTab({ user }) {
   const [page, setPage] = useState(1);
   const [lightbox, setLightbox] = useState(null);
   const [showWholesale, setShowWholesale] = useState(null);
+  const [wholesaleInline, setWholesaleInline] = useState(null); // eval id for inline wholesale
+  const [wsContacts, setWsContacts] = useState([]);
+  const [wsChecked, setWsChecked] = useState({});
+  const [wsSending, setWsSending] = useState(false);
+  const [wsSent, setWsSent] = useState({});
   const perPage = 20;
+
+  // Fetch wholesale contacts once
+  useEffect(() => {
+    fetch(`${API}/api/wholesale-contacts`).then(r => r.json()).then(d => setWsContacts(d.contacts || [])).catch(() => {});
+  }, []);
 
   const fetchEvals = useCallback(async () => {
     setLoading(true);
@@ -1832,6 +1883,28 @@ function EvaluationsTab({ user }) {
 
   useEffect(() => { fetchEvals(); }, [fetchEvals]);
   useEffect(() => { fetch(`${API}/api/users`).then(r => r.json()).then(d => setUsers(d.users || [])).catch(() => {}); }, []);
+
+  // Get directeur email for reply-to
+  const directeur = users.find(u => u.role === 'directeur');
+  const replyToEmail = directeur?.email || '';
+
+  const toggleWholesaleInline = (evId) => {
+    if (wholesaleInline === evId) { setWholesaleInline(null); setWsChecked({}); }
+    else { setWholesaleInline(evId); setWsChecked({}); setWsSent({}); }
+  };
+
+  const sendWholesaleChecked = async (ev) => {
+    const selected = wsContacts.filter(c => wsChecked[c.id || c.email] && c.email);
+    if (selected.length === 0) return;
+    setWsSending(true);
+    for (const c of selected) {
+      try {
+        await fetch(`${API}/api/wholesale/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ evaluation_id: ev.id, contact_email: c.email, contact_name: c.name, reply_to: replyToEmail }) });
+        setWsSent(s => ({ ...s, [c.id || c.email]: true }));
+      } catch (e) { console.error(e); }
+    }
+    setWsSending(false);
+  };
 
   const updateStatus = async (id, st) => {
     await fetch(`${API}/api/evaluations/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: st }) });
@@ -2079,6 +2152,28 @@ function EvaluationsTab({ user }) {
                                 {ev.photos.length > 4 && <span className="eval-row-more">+{ev.photos.length - 4}</span>}
                               </div>
                             )}
+                            {/* Wholesale inline menu */}
+                            {(user?.role === 'admin' || user?.role === 'directeur') && wholesaleInline === ev.id && (
+                              <div className="eval-ws-inline" onClick={e => e.stopPropagation()}>
+                                <div className="eval-ws-title">Envoyer aux grossistes {replyToEmail && <span className="eval-ws-reply">Retour: {replyToEmail}</span>}</div>
+                                {wsContacts.length === 0 ? (
+                                  <div className="eval-ws-empty">Aucun contact wholesale</div>
+                                ) : (
+                                  <>
+                                    {wsContacts.map(c => (
+                                      <label key={c.id || c.email} className="eval-ws-contact">
+                                        <input type="checkbox" checked={!!wsChecked[c.id || c.email]} onChange={() => setWsChecked(s => ({ ...s, [c.id || c.email]: !s[c.id || c.email] }))} disabled={!c.email} />
+                                        <span className="eval-ws-name">{c.name || c.email}</span>
+                                        {wsSent[c.id || c.email] && <span className="eval-ws-sent">Envoye</span>}
+                                      </label>
+                                    ))}
+                                    <button className="eval-ws-send-btn" onClick={() => sendWholesaleChecked(ev)} disabled={wsSending || Object.values(wsChecked).filter(Boolean).length === 0}>
+                                      {wsSending ? '...' : `Envoyer (${Object.values(wsChecked).filter(Boolean).length})`}
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            )}
                           </td>
                           <td className="eval-td-client">
                             <div className="eval-c-name">{ev.client_name}</div>
@@ -2092,7 +2187,7 @@ function EvaluationsTab({ user }) {
                           <td className="eval-td-actions" onClick={e => e.stopPropagation()}>
                             <button className="eval-action-btn" title="Voir" onClick={() => setSelected(ev)}>&#9998;</button>
                             {(user?.role === 'admin' || user?.role === 'directeur') && (
-                              <button className="eval-action-btn eval-wholesale-btn" title="Wholesale" onClick={() => setShowWholesale(ev)}>W</button>
+                              <button className={`eval-action-btn eval-wholesale-btn ${wholesaleInline === ev.id ? 'active' : ''}`} title="Wholesale" onClick={() => toggleWholesaleInline(ev.id)}>W</button>
                             )}
                           </td>
                         </tr>
