@@ -66,6 +66,9 @@ STATE_FILE = Path(__file__).parent / ".repair_state.json"
 # Fichier pour stocker le dernier commit stable
 STABLE_COMMIT_FILE = Path(__file__).parent / ".last_stable_commit"
 
+# Vercel Deploy Hook (declenche un rebuild frontend automatiquement)
+VERCEL_DEPLOY_HOOK = os.getenv("DEPLOY_HOOKS", "https://api.vercel.com/v1/integrations/deploy/prj_FBYVaVmG32m2UMe1pwmlPN2lDAZv/0cBqEJL8UW")
+
 # Email configuration (utilise les variables SMTP du Render)
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
@@ -312,6 +315,16 @@ def rollback_to_stable() -> bool:
 def restart_service() -> bool:
     log("Tentative de redemarrage du service...", "REPAIR")
 
+    # 1. Trigger Vercel redeploy via hook
+    try:
+        if VERCEL_DEPLOY_HOOK:
+            r = requests.post(VERCEL_DEPLOY_HOOK, timeout=15)
+            if r.status_code == 200:
+                log("Vercel redeploy declenche via hook", "OK")
+    except Exception as e:
+        log(f"Vercel hook error: {e}", "WARN")
+
+    # 2. Trigger Render redeploy via empty commit
     render_api_key = os.getenv("RENDER_API_KEY")
     if render_api_key:
         try:
