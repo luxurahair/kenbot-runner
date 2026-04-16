@@ -7,9 +7,10 @@
 ### 1. kenbot-runner (Bot FB — Render Cron) - EN PRODUCTION
 - Scrape Kennebec > IA > Facebook
 - Detection par STOCK: NEW / SOLD / UNSOLD / PRICE_CHANGED / PHOTOS_ADDED / CLEANUP
-- Footer pro Daniel Giroux + hashtags SEO dynamiques
+- Footer pro Daniel Giroux + hashtags SEO dynamiques + lien /reprise
 - Nettoyeur post-IA (_clean_ai_output)
 - PROFIL DU VEHICULE + CARACTERISTIQUES CERTIFIEES
+- Meta compare (site vs FB) en fin de run
 
 ### 2. kenbot-dashboard (Dashboard — Vercel + Render) - EN PRODUCTION
 - URL: https://kenbot-dashboard-five.vercel.app
@@ -25,7 +26,8 @@
 - Module centralise: pipeline/ (client.py, prompts.py, generator.py, cliches.py)
 - ZERO modification a runner_cron_prod.py
 - Backup complet: backup_2026-04-16/
-- Tests: 42/43 (seul Lamborghini Huracan manquant dans vehicle_intelligence.py)
+- Tests: 60/60 (classifier, vehicle_intelligence, cliches, footer+reprise, SOLD, UNSOLD, VIN NHTSA, meta_compare, NO_PHOTO)
+- Lamborghini Huracan + Urus ajoutes a vehicle_intelligence.py
 - Compatibilite arriere: TOUS les imports existants fonctionnent
 
 ## Pipeline Architecture
@@ -46,12 +48,13 @@ pipeline/
 - UNSOLD: Faux vendu corrige (restauration)
 
 ## Completed (2026-04-16)
-- Kit Auto-Repair pour Kenbot: monitoring/auto_repair.py + .github/workflows/auto-repair.yml
+- Kit Auto-Repair: monitoring/auto_repair.py + .github/workflows/auto-repair.yml
 - Health endpoint /api/health ajoute au backend
 - SMTP notifications testees et fonctionnelles
-- Pipeline OpenAI unifie: pipeline/ module cree
-- Programme de tests complet: tests/test_pipeline_generation.py
-- Backup complet: backup_2026-04-16/ (9 fichiers)
+- Pipeline OpenAI unifie: pipeline/ module
+- Tests complets 60/60: tests/test_pipeline_generation.py
+- Backup complet: backup_2026-04-16/ (9 fichiers + STRUCTURE.md)
+- Lamborghini Huracan/Urus ajoutes a vehicle_intelligence.py
 
 ## Backlog
 - P0: Deployer via "Save to Github" + ajouter secrets GitHub (SMTP_USER, SMTP_PASS)

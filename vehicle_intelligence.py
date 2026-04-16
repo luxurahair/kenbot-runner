@@ -605,6 +605,26 @@ MODEL_SPECS = {
         "known_for": "la supercar turbo qui a redéfini Ferrari",
         "trims": {},
     },
+    # LAMBORGHINI
+    "huracan": {
+        "type": "exotique",
+        "known_for": "la supercar V10 atmosphérique — son et sensation pures",
+        "trims": {
+            "evo": {"hp": "631", "engine": "V10 atmosphérique 5.2L", "vibe": "631 chevaux, 0-100 en 2.9 secondes"},
+            "tecnica": {"hp": "631", "engine": "V10 atmosphérique 5.2L", "vibe": "la Huracan de piste — aéro et grip"},
+            "sto": {"hp": "631", "engine": "V10 atmosphérique 5.2L", "vibe": "née sur la piste, légale sur la route"},
+            "sterrato": {"hp": "602", "engine": "V10 atmosphérique 5.2L", "vibe": "la supercar off-road — unique au monde"},
+        },
+    },
+    "urus": {
+        "type": "exotique",
+        "known_for": "le SUV supercar — performance et luxe extrême",
+        "trims": {
+            "s": {"hp": "657", "engine": "V8 Biturbo 4.0L", "vibe": "le SUV le plus rapide du monde"},
+            "performante": {"hp": "666", "engine": "V8 Biturbo 4.0L", "vibe": "le Urus ultime — encore plus méchant"},
+            "se": {"hp": "789", "engine": "V8 Biturbo 4.0L + électrique", "vibe": "hybride rechargeable avec 789 chevaux"},
+        },
+    },
     # HYUNDAI (modèles courants)
     "tucson": {
         "type": "suv_compact",
