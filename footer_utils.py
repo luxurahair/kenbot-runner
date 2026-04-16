@@ -126,7 +126,7 @@ def get_dealer_footer(
     lines.append("")
     lines.append("📋 Tu veux savoir combien vaut ton vehicule?")
     lines.append("📸 Remplis le formulaire + envoie tes photos ici:")
-    lines.append("👉 Obtenir mon evaluation gratuite : https://kenbot-dashboard-five.vercel.app/reprise")
+    lines.append("👉 Obtenir mon evaluation gratuite : tinyurl.com/EvaluerMonAuto")
     lines.append("")
 
     if include_hashtags:
