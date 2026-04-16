@@ -4,6 +4,141 @@ import './App.css';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
+// ═══ PHOTO LIGHTBOX / SLIDER ═══
+function PhotoSlider({ photos, startIndex, onClose }) {
+  const [idx, setIdx] = useState(startIndex || 0);
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowRight') setIdx(i => Math.min(i + 1, photos.length - 1));
+      if (e.key === 'ArrowLeft') setIdx(i => Math.max(i - 1, 0));
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [photos.length, onClose]);
+
+  if (!photos?.length) return null;
+  return (
+    <div className="lightbox-overlay" onClick={onClose} data-testid="photo-slider">
+      <div className="lightbox-inner" onClick={e => e.stopPropagation()}>
+        <button className="lightbox-close" onClick={onClose}>&times;</button>
+        <div className="lightbox-main">
+          {idx > 0 && <button className="lightbox-nav lightbox-prev" onClick={() => setIdx(i => i - 1)}>&#8249;</button>}
+          <img src={photos[idx]} alt={`Photo ${idx + 1}`} className="lightbox-img" />
+          {idx < photos.length - 1 && <button className="lightbox-nav lightbox-next" onClick={() => setIdx(i => i + 1)}>&#8250;</button>}
+        </div>
+        <div className="lightbox-counter">{idx + 1} / {photos.length}</div>
+        <div className="lightbox-thumbs">
+          {photos.map((p, i) => <img key={i} src={p} alt="" className={`lightbox-thumb ${i === idx ? 'active' : ''}`} onClick={() => setIdx(i)} />)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══ WHOLESALE PANEL ═══
+function WholesalePanel({ evaluation, onClose }) {
+  const [contacts, setContacts] = useState([]);
+  const [newEmail, setNewEmail] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newPhone, setNewPhone] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState([]);
+
+  useEffect(() => {
+    fetch(`${API}/api/wholesale-contacts`).then(r => r.json()).then(d => setContacts(d.contacts || [])).catch(() => {});
+  }, []);
+
+  const addContact = async () => {
+    if (!newEmail && !newPhone) return;
+    try {
+      const r = await fetch(`${API}/api/wholesale-contacts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newName, email: newEmail, phone: newPhone }) });
+      if (r.ok) { setNewEmail(''); setNewName(''); setNewPhone(''); const d = await fetch(`${API}/api/wholesale-contacts`).then(r2 => r2.json()); setContacts(d.contacts || []); }
+    } catch (e) { console.error(e); }
+  };
+
+  const deleteContact = async (id) => {
+    await fetch(`${API}/api/wholesale-contacts/${id}`, { method: 'DELETE' });
+    setContacts(c => c.filter(x => x.id !== id));
+  };
+
+  const sendToContact = async (contact) => {
+    setSending(true);
+    try {
+      await fetch(`${API}/api/wholesale/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ evaluation_id: evaluation.id, contact_email: contact.email, contact_name: contact.name }) });
+      setSent(s => [...s, contact.id || contact.email]);
+    } catch (e) { console.error(e); }
+    setSending(false);
+  };
+
+  const sendToAll = async () => {
+    setSending(true);
+    for (const c of contacts.filter(c => c.email)) {
+      await sendToContact(c);
+    }
+    setSending(false);
+  };
+
+  const ev = evaluation;
+  const ws = {
+    overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '2rem', overflowY: 'auto', backdropFilter: 'blur(4px)' },
+    panel: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '10px', width: '100%', maxWidth: '600px', padding: '1.5rem' },
+    title: { fontFamily: 'Chivo', fontWeight: 700, fontSize: '1.1rem', marginBottom: '1rem' },
+    row: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '0.4rem', marginBottom: '0.5rem' },
+    input: { padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.8rem', width: '100%' },
+    contact: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.6rem 0', borderBottom: '1px solid var(--border)' },
+  };
+
+  return (
+    <div style={ws.overlay} onClick={onClose} data-testid="wholesale-panel">
+      <div style={ws.panel} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div style={ws.title}>Envoyer aux grossistes</div>
+          <button className="eval-btn-ghost" onClick={onClose}>&times;</button>
+        </div>
+        <div style={{ background: 'var(--surface-secondary)', padding: '0.75rem', borderRadius: '6px', marginBottom: '1rem', fontSize: '0.8rem' }}>
+          <strong>{ev.year} {ev.make} {ev.model} {ev.trim}</strong> — {ev.km ? `${Number(ev.km).toLocaleString('fr-CA')} km` : ''} — {ev.etat_general}
+        </div>
+
+        <div style={{ marginBottom: '1rem' }}>
+          <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>Ajouter un contact</div>
+          <div style={ws.row}>
+            <input style={ws.input} placeholder="Nom" value={newName} onChange={e => setNewName(e.target.value)} />
+            <input style={ws.input} placeholder="Email" type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)} />
+            <input style={ws.input} placeholder="Telephone" value={newPhone} onChange={e => setNewPhone(e.target.value)} />
+            <button className="eval-btn-primary" onClick={addContact} style={{ whiteSpace: 'nowrap' }}>+</button>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Contacts ({contacts.length})</span>
+            {contacts.length > 0 && <button className="eval-btn-primary" onClick={sendToAll} disabled={sending}>{sending ? '...' : 'Envoyer a tous'}</button>}
+          </div>
+          {contacts.length === 0 ? (
+            <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '1rem', fontSize: '0.8rem' }}>Aucun contact. Ajoutez des grossistes ci-dessus.</div>
+          ) : contacts.map((c, i) => (
+            <div key={c.id || i} style={ws.contact}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{c.name || 'Sans nom'}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{c.email} {c.phone ? `| ${c.phone}` : ''}</div>
+              </div>
+              <div style={{ display: 'flex', gap: '0.3rem' }}>
+                {sent.includes(c.id || c.email) ? (
+                  <span style={{ color: 'var(--accent-green)', fontSize: '0.75rem', fontWeight: 700 }}>Envoye</span>
+                ) : (
+                  <button className="eval-btn-primary" onClick={() => sendToContact(c)} disabled={sending || !c.email} style={{ fontSize: '0.7rem', padding: '4px 10px' }}>Envoyer</button>
+                )}
+                <button className="eval-action-btn" onClick={() => deleteContact(c.id)} style={{ fontSize: '0.65rem', padding: '4px 6px' }}>&#128465;</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Role-based tab access
 const ROLE_TABS = {
   admin: ['cockpit', 'compare', 'reprise', 'evaluations', 'utilisateurs', 'dashboard', 'inventory', 'posts', 'textpreview', 'events', 'architecture', 'changelog'],
@@ -1678,6 +1813,8 @@ function EvaluationsTab({ user }) {
   const [showFilters, setShowFilters] = useState(false);
   const [users, setUsers] = useState([]);
   const [page, setPage] = useState(1);
+  const [lightbox, setLightbox] = useState(null);
+  const [showWholesale, setShowWholesale] = useState(null);
   const perPage = 20;
 
   const fetchEvals = useCallback(async () => {
@@ -1763,9 +1900,9 @@ function EvaluationsTab({ user }) {
         </div>
 
         {ev.photos?.length > 0 && (
-          <div className="eval-photos-hero">
+          <div className="eval-photos-hero" onClick={() => setLightbox({ photos: ev.photos, idx: 0 })} style={{ cursor: 'pointer' }}>
             <img src={ev.photos[0]} alt="" className="eval-hero-img" />
-            <span className="eval-photo-count">{ev.photos.length} photos</span>
+            <span className="eval-photo-count">Cliquez pour voir — {ev.photos.length} photos</span>
           </div>
         )}
 
@@ -1795,7 +1932,7 @@ function EvaluationsTab({ user }) {
           ))}
         </div>
 
-        {ev.photos?.length > 1 && <div className="eval-section"><div className="eval-section-title">Photos ({ev.photos.length})</div><div className="eval-photos-grid">{ev.photos.map((u,i) => <img key={i} src={u} alt="" className="eval-photo-thumb" onClick={() => window.open(u)} />)}</div></div>}
+        {ev.photos?.length > 1 && <div className="eval-section"><div className="eval-section-title">Photos ({ev.photos.length})</div><div className="eval-photos-grid">{ev.photos.map((u,i) => <img key={i} src={u} alt="" className="eval-photo-thumb" onClick={() => setLightbox({ photos: ev.photos, idx: i })} />)}</div></div>}
         {fd.options?.length > 0 && <div className="eval-section"><div className="eval-section-title">Equipements ({fd.options.length})</div><div className="eval-tags">{fd.options.map(o => <span key={o} className="eval-tag-blue">{o}</span>)}</div></div>}
         {fd.dommages?.length > 0 && <div className="eval-section"><div className="eval-section-title">Dommages ({fd.dommages.length})</div><div className="eval-tags">{fd.dommages.map(d => <span key={d} className="eval-tag-red">{d}</span>)}</div></div>}
 
@@ -1816,7 +1953,17 @@ function EvaluationsTab({ user }) {
             {EVAL_STATUTS.map(st => <button key={st} onClick={() => updateStatus(ev.id, st)} className={`eval-status-btn ${ev.status === st ? 'active' : ''}`} style={{ '--sc': EVAL_COLORS[st] || '#6b7280' }}>{st}</button>)}
           </div>
         </div>
+
+        {canSetPrice && (
+          <div className="eval-section">
+            <button className="eval-btn-wholesale" onClick={() => setShowWholesale(ev)}>Envoyer aux grossistes (Wholesale)</button>
+          </div>
+        )}
+
         <div className="eval-footer-meta">Recu le {new Date(ev.created_at).toLocaleString('fr-CA')}{ev.created_by && ev.created_by !== 'client' ? ` — par ${ev.created_by}` : ' — soumis par le client'}</div>
+
+        {lightbox && <PhotoSlider photos={lightbox.photos} startIndex={lightbox.idx} onClose={() => setLightbox(null)} />}
+        {showWholesale && <WholesalePanel evaluation={showWholesale} onClose={() => setShowWholesale(null)} />}
       </div>
     );
   }

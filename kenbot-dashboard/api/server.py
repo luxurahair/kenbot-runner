@@ -1433,6 +1433,105 @@ async def reprise_upload_photo(file: UploadFile = File(...), evaluation_id: str 
 
 app.include_router(api_router)
 
+# ═══ WHOLESALE ENDPOINTS ═══
+wholesale_router = APIRouter(prefix="/api")
+
+@wholesale_router.get("/wholesale-contacts")
+async def list_wholesale_contacts():
+    if not sb:
+        return {"contacts": []}
+    try:
+        result = sb.table("wholesale_contacts").select("*").eq("active", True).order("name").execute()
+        return {"contacts": result.data or []}
+    except Exception as e:
+        logging.warning(f"wholesale_contacts table may not exist: {e}")
+        return {"contacts": []}
+
+@wholesale_router.post("/wholesale-contacts")
+async def add_wholesale_contact(data: dict):
+    from fastapi import HTTPException
+    if not sb:
+        raise HTTPException(500, "DB non connectee")
+    contact = {
+        "id": str(uuid.uuid4()),
+        "name": (data.get("name") or "").strip(),
+        "email": (data.get("email") or "").strip(),
+        "phone": (data.get("phone") or "").strip(),
+        "active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        sb.table("wholesale_contacts").insert(contact).execute()
+        return {"success": True, "id": contact["id"]}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@wholesale_router.delete("/wholesale-contacts/{contact_id}")
+async def delete_wholesale_contact(contact_id: str):
+    from fastapi import HTTPException
+    if not sb:
+        raise HTTPException(500, "DB non connectee")
+    try:
+        sb.table("wholesale_contacts").delete().eq("id", contact_id).execute()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@wholesale_router.post("/wholesale/send")
+async def send_wholesale_email(data: dict):
+    from fastapi import HTTPException
+    if not sb:
+        raise HTTPException(500, "DB non connectee")
+    eval_id = data.get("evaluation_id")
+    contact_email = data.get("contact_email")
+    contact_name = data.get("contact_name", "")
+    if not eval_id or not contact_email:
+        raise HTTPException(400, "evaluation_id et contact_email requis")
+    try:
+        result = sb.table("evaluations").select("*").eq("id", eval_id).limit(1).execute()
+        if not result.data:
+            raise HTTPException(404, "Evaluation non trouvee")
+        ev = result.data[0]
+        fd = ev.get("form_data", {})
+        photos_html = ""
+        for p in (ev.get("photos") or [])[:5]:
+            photos_html += f'<img src="{p}" style="width:150px;height:120px;object-fit:cover;border-radius:6px;margin:4px" />'
+        options_html = ""
+        for o in (fd.get("options") or []):
+            options_html += f'<span style="display:inline-block;padding:2px 8px;margin:2px;border-radius:4px;background:#f0f9ff;color:#0284c7;font-size:12px">{o}</span>'
+        subject = f"Evaluation de reprise — {ev.get('year','')} {ev.get('make','')} {ev.get('model','')} {ev.get('trim','')}"
+        body = f"""
+        <div style="font-family:Arial,sans-serif;max-width:650px;margin:0 auto;background:#f9fafb;padding:2rem;border-radius:10px">
+          <div style="text-align:center;margin-bottom:1.5rem">
+            <h2 style="color:#0284c7;margin:0">Evaluation de reprise</h2>
+            <p style="color:#6b7280;margin:0.25rem 0">Kennebec Dodge Chrysler — Saint-Georges</p>
+          </div>
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:1.5rem;margin-bottom:1rem">
+            <h3 style="margin:0 0 0.5rem;color:#111">{ev.get('year','')} {ev.get('make','')} {ev.get('model','')} {ev.get('trim','')}</h3>
+            <table style="width:100%;border-collapse:collapse">
+              <tr><td style="padding:6px 0;color:#6b7280;width:120px">VIN</td><td style="padding:6px 0;font-family:monospace">{ev.get('vin','')}</td></tr>
+              <tr><td style="padding:6px 0;color:#6b7280">Kilometrage</td><td style="padding:6px 0;font-weight:600">{ev.get('km','')} km</td></tr>
+              <tr><td style="padding:6px 0;color:#6b7280">Moteur</td><td style="padding:6px 0">{ev.get('engine','')}</td></tr>
+              <tr><td style="padding:6px 0;color:#6b7280">Motricite</td><td style="padding:6px 0">{ev.get('drive_type','')}</td></tr>
+              <tr><td style="padding:6px 0;color:#6b7280">Etat general</td><td style="padding:6px 0;font-weight:600">{ev.get('etat_general','')}</td></tr>
+              <tr><td style="padding:6px 0;color:#6b7280">Couleur ext.</td><td style="padding:6px 0">{fd.get('couleur_ext','')}</td></tr>
+            </table>
+          </div>
+          {f'<div style="margin-bottom:1rem">{photos_html}</div>' if photos_html else ''}
+          {f'<div style="margin-bottom:1rem"><strong>Equipements:</strong><br/>{options_html}</div>' if options_html else ''}
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:1rem;text-align:center">
+            <p style="color:#6b7280;margin:0 0 0.5rem;font-size:14px">Vous etes interesse? Repondez a ce courriel avec votre offre.</p>
+            <p style="color:#111;font-weight:600;margin:0">Daniel Giroux — 418-222-3939</p>
+          </div>
+        </div>"""
+        send_email(contact_email, subject, body)
+        return {"success": True}
+    except Exception as e:
+        logging.error(f"Wholesale send error: {e}")
+        raise HTTPException(500, str(e))
+
+app.include_router(wholesale_router)
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
