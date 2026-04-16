@@ -2063,7 +2063,6 @@ function EvaluationsTab({ user }) {
                           <td className="eval-td-date">{new Date(ev.created_at).toLocaleDateString('fr-CA', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
                           <td className="eval-td-vehicle">
                             <div className="eval-vehicle-info">
-                              {ev.photos?.length > 0 && <span className="eval-photo-badge">{ev.photos.length}</span>}
                               {logo && <img src={logo} alt="" className="eval-brand-logo" onError={e => e.target.style.display='none'} />}
                               <div>
                                 <div className="eval-v-name">{ev.make} {ev.model}</div>
@@ -2072,6 +2071,14 @@ function EvaluationsTab({ user }) {
                                 <div className="eval-v-vin">{ev.vin}</div>
                               </div>
                             </div>
+                            {ev.photos?.length > 0 && (
+                              <div className="eval-row-photos" onClick={e => e.stopPropagation()}>
+                                {ev.photos.slice(0, 4).map((url, i) => (
+                                  <img key={i} src={url} alt="" className="eval-row-thumb" onClick={() => setLightbox({ photos: ev.photos, idx: i })} />
+                                ))}
+                                {ev.photos.length > 4 && <span className="eval-row-more">+{ev.photos.length - 4}</span>}
+                              </div>
+                            )}
                           </td>
                           <td className="eval-td-client">
                             <div className="eval-c-name">{ev.client_name}</div>
@@ -2084,6 +2091,9 @@ function EvaluationsTab({ user }) {
                           <td className="eval-td-status">{evalBadge(ev.status)}</td>
                           <td className="eval-td-actions" onClick={e => e.stopPropagation()}>
                             <button className="eval-action-btn" title="Voir" onClick={() => setSelected(ev)}>&#9998;</button>
+                            {(user?.role === 'admin' || user?.role === 'directeur') && (
+                              <button className="eval-action-btn eval-wholesale-btn" title="Wholesale" onClick={() => setShowWholesale(ev)}>W</button>
+                            )}
                           </td>
                         </tr>
                       );

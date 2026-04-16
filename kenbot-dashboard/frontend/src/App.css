@@ -1252,6 +1252,17 @@ input:focus, select:focus, textarea:focus {
 .eval-action-btn { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; cursor: pointer; color: var(--text-secondary); font-size: 0.8rem; }
 .eval-action-btn:hover { border-color: #0ea5e9; color: #0ea5e9; }
 
+/* Miniatures photos dans la liste */
+.eval-row-photos { display: flex; gap: 4px; margin-top: 6px; align-items: center; flex-wrap: wrap; }
+.eval-row-thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); cursor: pointer; transition: transform 0.15s, border-color 0.15s; }
+.eval-row-thumb:hover { transform: scale(1.15); border-color: #0ea5e9; z-index: 2; }
+.eval-row-more { font-size: 0.65rem; font-weight: 700; color: var(--text-secondary); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; display: flex; align-items: center; }
+
+/* Bouton Wholesale inline */
+.eval-wholesale-btn { background: #a855f720 !important; border-color: #a855f740 !important; color: #a855f7 !important; font-weight: 700; font-size: 0.7rem !important; }
+.eval-wholesale-btn:hover { background: #a855f730 !important; border-color: #a855f7 !important; }
+.eval-td-actions { display: flex; gap: 4px; align-items: center; }
+
 /* Pagination */
 .eval-pagination { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; margin-top: 0.5rem; border-top: 1px solid var(--border); }
 .eval-page-info { font-size: 0.75rem; color: var(--text-secondary); }
