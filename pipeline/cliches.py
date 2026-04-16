@@ -42,6 +42,22 @@ CLICHES_INTERDITS_LIST: List[str] = [
     "chemins de la beauce",
     "paysages de la beauce",
     "paysages beauceron",
+    "faire tourner les têtes",
+    "faire tourner les tetes",
+    "passionné par les voitures depuis",
+    "passionne par les voitures depuis",
+    "en tant que passionné",
+    "en tant que passionne",
+    "deux décennies d'expérience",
+    "deux decennies d'experience",
+    "expérience de conduite exceptionnelle",
+    "experience de conduite exceptionnelle",
+    "saura répondre à vos besoins",
+    "saura repondre a vos besoins",
+    "ne manque pas de",
+    "véritable partenaire",
+    "veritable partenaire",
+    "choix exceptionnel",
 ]
 
 # Version texte pour injection dans les prompts

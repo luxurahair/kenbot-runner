@@ -32,6 +32,14 @@ REGLES ABSOLUES:
 - ABSOLUMENT AUCUN mot vulgaire, grossier ou a caractere sexuel. C'est une page PROFESSIONNELLE.
 - Chaque texte doit etre UNIQUE.
 - Le ton est direct, authentique, passionne.
+
+REGLES INTRO — CRITIQUES:
+- JAMAIS commencer par parler de toi, de ton experience, de ta passion ou de tes annees dans le metier.
+- JAMAIS "Passionne par les voitures depuis...", "En tant que passionne...", "Avec mes X annees d'experience..."
+- JAMAIS "faire tourner les tetes", "experience de conduite exceptionnelle", "choix exceptionnel", "veritable partenaire"
+- TOUJOURS commencer par LE VEHICULE. Le client veut savoir ce qu'il achete, pas ton CV.
+- La premiere phrase doit parler du CHAR, pas du vendeur.
+- Varie les ouvertures: question, chiffre, mise en situation, fait precis, prix, kilometrage.
 """
 
 
@@ -107,11 +115,16 @@ ANGLES_PAR_TYPE = {
 }
 
 VARIATIONS_INTRO = [
-    "Commence par une question rhetorique courte",
-    "Commence par un fait concret sur le vehicule",
-    "Commence par mentionner pourquoi tu vends ce modele",
-    "Commence directement par le benefice principal",
-    "Commence par une observation personnelle de vendeur",
+    "Commence DIRECTEMENT par le vehicule. Ex: 'Ce RAM 1500 la, c'est...'",
+    "Commence par UNE question courte au lecteur. Ex: 'Tu cherches un pickup fiable?'",
+    "Commence par un chiffre ou fait precis du vehicule. Ex: '395 chevaux sous le capot...'",
+    "Commence par une mise en situation. Ex: 'Imagine toi au volant de...'",
+    "Commence par ce qui rend CE vehicule rare. Ex: 'Un Scat Pack 2023 avec 11 000 km...'",
+    "Commence par le prix ou l'opportunite. Ex: 'A ce prix-la, ca partira pas...'",
+    "Commence par le kilometrage. Ex: '25 000 km, un seul proprio...'",
+    "Commence par une anecdote. Ex: 'Quand j'ai vu arriver ce char-la sur le lot...'",
+    "Commence par un conseil. Ex: 'Si tu veux un char qui garde sa valeur...'",
+    "Commence par un fait du marche. Ex: 'Les Wrangler Rubicon a ce prix, y'en a pas...'",
 ]
 
 
@@ -169,19 +182,25 @@ Ecris une accroche Facebook de {max_chars} caracteres maximum.
 SYSTEM_PROMPT_V3 = f"""{DANIEL_IDENTITY_V3}
 
 {REGLES_COMMUNES}
-- Maximum 3-4 phrases pour l'intro. Pas de roman.
+- Maximum 2-3 phrases pour l'intro. Court et punchy.
 - Pas de hashtags dans l'intro.
 - Pas d'emojis dans l'intro (ils viennent apres dans le corps de l'annonce).
 - JAMAIS mentionner "Daniel Giroux" ou tout nom de vendeur dans l'intro du haut. Le nom sera ajoute automatiquement dans le footer.
+- JAMAIS commencer par parler du vendeur, de son experience ou de sa passion. TOUJOURS commencer par LE VEHICULE.
 - Le PRIX doit TOUJOURS apparaitre clairement dans le corps de l'annonce (ex: "💰 34 995 $").
 """
 
 INTRO_STYLES = [
-    "direct",
-    "storytelling",
-    "question",
-    "expertise",
-    "opportunite",
+    "NOUVELLE ARRIVAGE: Commence par 'Nouvelle arrivage!' ou 'Juste rentre sur le lot!' puis decris le char",
+    "CHIFFRE PUNCH: Commence par un chiffre frappant (HP, km bas, prix, annee). Ex: '395 chevaux, 25 000 km, un proprio.'",
+    "QUESTION CLIENT: Pose une question directe au lecteur. Ex: 'Tu cherches un pickup qui lache pas?' ou 'Qui veut un V8 HEMI?'",
+    "LE CHAR PARLE: Decris le vehicule comme si tu le voyais pour la premiere fois. Ex: 'Regarde-moi ce RAM la...' ou 'Quand j'ai vu ce Challenger arriver...'",
+    "OCCASION RARE: Mets l'accent sur la rarete. Ex: 'Un Rubicon 2024 avec 15 000 km, ca se voit pas souvent.' ou 'Rare sur le marche!'",
+    "PRIX/DEAL: Commence par le prix ou le deal. Ex: 'A 34 995$, t'auras pas mieux.' ou 'Baisse de prix — faut que ca parte!'",
+    "POUR QUI: Commence par le client ideal. Ex: 'Pour celui qui a besoin d'un vrai camion de travail...' ou 'Si t'as une famille pis tu veux du confort...'",
+    "SPEC TECHNIQUE: Commence par LA spec qui tue. Ex: 'V8 6.4L, 485 chevaux. Point final.' ou 'Moteur hybride 288 HP et 0 compromis.'",
+    "HISTOIRE COURTE: Commence par un mini contexte. Ex: 'Le proprio l'a garde 2 ans dans le garage.' ou 'Un seul proprietaire, entretien chez nous.'",
+    "SAISON/MOMENT: Lie au moment. Ex: 'Juste a temps pour l'ete!' ou 'L'hiver s'en vient — un 4x4 ca se refuse pas.'",
 ]
 
 
@@ -250,9 +269,13 @@ OPTIONS/EQUIPEMENTS CONFIRMES:
 ANGLES DE VENTE SUGGERES: {', '.join(brand_angles[:3]) if brand_angles else 'qualite, valeur, confiance'}
 
 INSTRUCTIONS:
-1. Ecris une INTRO de 3-4 phrases maximum. Naturelle, directe, passionnee.
-   - Mentionne ce qui rend CE vehicule special (pas une intro generique)
-   - Si tu connais le moteur/HP, mentionne-le naturellement
+1. Ecris une INTRO de 2-3 phrases maximum. COURTE et PUNCHY.
+   REGLES CRITIQUES POUR L'INTRO:
+   - La PREMIERE phrase doit parler DU VEHICULE, jamais du vendeur
+   - INTERDIT de commencer par ton experience, ta passion, tes annees dans le metier
+   - INTERDIT: "Passionne depuis...", "Avec mes annees d'experience...", "En tant que..."
+   - INTERDIT: "faire tourner les tetes", "choix exceptionnel", "veritable partenaire"
+   - Commence par le CHAR: son nom, ses specs, son prix, sa rarete, un chiffre
    - Adapte le ton au type: {tone}
 
 2. Puis le CORPS structure:
