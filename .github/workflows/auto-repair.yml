@@ -63,6 +63,8 @@ jobs:
           endpoints = [
               {"path": "/api/health", "name": "Health", "critical": True},
               {"path": "/api/evaluations", "name": "Evaluations", "critical": True},
+              {"path": "/api/cron/status", "name": "Cron Status", "critical": False},
+              {"path": "/api/services/status", "name": "Services", "critical": False},
               {"path": "/api/wholesale-contacts", "name": "Wholesale", "critical": False},
           ]
 

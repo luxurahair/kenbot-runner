@@ -81,6 +81,8 @@ GITHUB_REPO = "luxurahair/kenbot-dashboard"
 CRITICAL_ENDPOINTS = [
     {"path": "/api/health", "method": "GET", "expected_status": 200, "name": "Health", "critical": True},
     {"path": "/api/evaluations", "method": "GET", "expected_status": 200, "name": "Evaluations", "critical": True},
+    {"path": "/api/cron/status", "method": "GET", "expected_status": 200, "name": "Cron Status", "critical": False},
+    {"path": "/api/services/status", "method": "GET", "expected_status": 200, "name": "Services", "critical": False},
     {"path": "/api/wholesale-contacts", "method": "GET", "expected_status": 200, "name": "Wholesale", "critical": False},
 ]
 

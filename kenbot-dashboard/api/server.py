@@ -202,6 +202,102 @@ async def get_system_status():
     
     return {"version": "2.1.0", "supabase_connected": False, "stats": {}}
 
+
+@api_router.get("/cron/status")
+async def get_cron_status():
+    """Retourne l'etat du dernier cron sync (scrape_runs + derniers events)."""
+    if not sb:
+        return {"status": "disconnected", "message": "Supabase non connectee"}
+    try:
+        # Dernier scrape run
+        last_run = sb.table("scrape_runs").select("*").order("created_at", desc=True).limit(1).execute()
+        run_data = last_run.data[0] if last_run.data else None
+
+        # 5 derniers events
+        last_events = sb.table("events").select("slug,type,created_at").order("created_at", desc=True).limit(5).execute()
+
+        # Stats rapides
+        total_runs = sb.table("scrape_runs").select("run_id", count="exact").execute()
+
+        cron_status = "ok"
+        message = "Cron operationnel"
+        if run_data:
+            if run_data.get("status", "").upper() not in ("OK", "SUCCESS", "DONE"):
+                cron_status = "warning"
+                message = f"Dernier run: {run_data.get('status', 'inconnu')}"
+
+        return {
+            "status": cron_status,
+            "message": message,
+            "last_run": {
+                "run_id": run_data.get("run_id", "") if run_data else None,
+                "created_at": run_data.get("created_at", "") if run_data else None,
+                "status": run_data.get("status", "") if run_data else None,
+                "note": run_data.get("note", "") if run_data else None,
+            },
+            "total_runs": total_runs.count if hasattr(total_runs, 'count') else len(total_runs.data or []),
+            "recent_events": [{"slug": e.get("slug",""), "type": e.get("type",""), "at": e.get("created_at","")} for e in (last_events.data or [])],
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@api_router.get("/services/status")
+async def get_services_status():
+    """Retourne l'etat de tous les services Kenbot."""
+    import requests as http_check
+    services = {}
+
+    # 1. Supabase DB
+    services["supabase"] = {"status": "connected" if sb else "disconnected", "url": SUPABASE_URL[:40] + "..."}
+
+    # 2. API locale (self)
+    services["api"] = {"status": "ok", "service": "kenbot-dashboard-api"}
+
+    # 3. Cron (dernier run)
+    if sb:
+        try:
+            lr = sb.table("scrape_runs").select("run_id,status,created_at").order("created_at", desc=True).limit(1).execute()
+            if lr.data:
+                run = lr.data[0]
+                age_ok = True
+                try:
+                    from datetime import datetime, timezone, timedelta
+                    run_time = datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+                    age_ok = (datetime.now(timezone.utc) - run_time) < timedelta(hours=6)
+                except Exception:
+                    pass
+                services["cron"] = {
+                    "status": "ok" if run.get("status","").upper() in ("OK","SUCCESS","DONE") and age_ok else "warning",
+                    "last_run": run.get("created_at",""),
+                    "run_status": run.get("status",""),
+                }
+            else:
+                services["cron"] = {"status": "no_data", "message": "Aucun run trouve"}
+        except Exception as e:
+            services["cron"] = {"status": "error", "message": str(e)}
+    else:
+        services["cron"] = {"status": "disconnected"}
+
+    # 4. SMTP
+    smtp_ok = bool(SMTP_USER and SMTP_PASS)
+    services["smtp"] = {"status": "configured" if smtp_ok else "not_configured", "user": SMTP_USER[:20] + "..." if SMTP_USER else ""}
+
+    # 5. Vercel frontend
+    try:
+        vr = http_check.get("https://kenbot-dashboard-five.vercel.app", timeout=10)
+        services["vercel"] = {"status": "ok" if vr.status_code == 200 else "down", "http": vr.status_code}
+    except Exception:
+        services["vercel"] = {"status": "unreachable"}
+
+    # Status global
+    all_ok = all(s.get("status") in ("ok", "connected", "configured") for s in services.values())
+    return {
+        "overall": "healthy" if all_ok else "degraded",
+        "services": services,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
 @api_router.get("/inventory")
 async def get_inventory(status: Optional[str] = None, limit: int = 200):
     filters = {}
