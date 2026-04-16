@@ -1,96 +1,95 @@
-# Kenbot Auto-Repair System
+# KENBOT MONITORING — Auto-Repair System
 
-## Vue d'ensemble
+Systeme de surveillance et reparation automatique pour l'ecosysteme Kenbot.
+Tourne toutes les 5 minutes via GitHub Actions.
 
-Ce systeme surveille automatiquement l'API Kenbot Dashboard et la repare si elle tombe en panne.
+---
 
-## Fonctionnalites
-
-- **Health Check** toutes les 5 minutes via GitHub Actions
-- **Auto-repair** si service down (max 5 tentatives)
-- **Rollback automatique** vers le dernier commit stable
-- **Notifications email** en cas de probleme
-- **Detection** des patterns d'erreurs connus
-
-## Configuration Requise
-
-### 1. Secrets GitHub a configurer
-
-Allez dans: **Repository > Settings > Secrets and variables > Actions**
-
-Ajoutez ces secrets:
-
-| Secret | Description | Valeur |
-|--------|-------------|--------|
-| `SMTP_USER` | Email d'envoi | `info@luxuradistribution.com` |
-| `SMTP_PASS` | App password Gmail | `(votre app password)` |
-
-### 2. Activer GitHub Actions
-
-Le workflow s'execute automatiquement toutes les 5 minutes. Vous pouvez aussi le declencher manuellement:
-
-1. Allez dans **Actions** > **Kenbot Auto-Repair Monitor**
-2. Cliquez **Run workflow**
-3. Choisissez l'action: `check`, `repair`, `rollback`, ou `status`
-
-## Comment ca marche
+## Fonctionnement
 
 ```
-TOUTES LES 5 MINUTES
-         |
+TOUTES LES 5 MINUTES (GitHub Actions cron)
+         │
          v
-  +---------------+
-  |  Health Check  |
-  |  /api/health   |
-  |  /api/evals    |
-  +-------+-------+
-          |
-    +-----+------+--------+
-    |            |         |
-    v            v         v
- HEALTHY    DEGRADED     DOWN
-    |            |         |
-    v            |         v
- Save Stable    |    AUTO-REPAIR
- Commit         |    1. Analyze
-                |    2. Rollback
-                |    3. Notify
-                |         |
-                v         v
-         Email si probleme
+  ┌───────────────────┐
+  │   Health Check     │
+  │   5 endpoints:     │
+  │   - /api/health    │
+  │   - /api/evaluations│
+  │   - /api/cron/status│
+  │   - /api/services/status│
+  │   - /api/wholesale-contacts│
+  └─────────┬─────────┘
+            │
+      ┌─────┴──────┬─────────┐
+      │            │          │
+      v            v          v
+   HEALTHY     DEGRADED     DOWN
+      │            │          │
+      v            │          v
+   Save          Email     AUTO-REPAIR
+   Stable        Alert     1. Analyse erreur
+   Commit                  2. Vercel deploy hook
+                           3. Render restart/rollback
+                           4. Email notification
 ```
 
-## Scripts locaux
+## Endpoints Surveilles
+
+| Endpoint | Critique | Description |
+|----------|----------|-------------|
+| `/api/health` | OUI | API + Supabase |
+| `/api/evaluations` | OUI | Evaluations reprise |
+| `/api/cron/status` | NON | Etat dernier cron |
+| `/api/services/status` | NON | Tous les services |
+| `/api/wholesale-contacts` | NON | Contacts grossistes |
+
+## Actions Automatiques
+
+| Status | Action |
+|--------|--------|
+| **HEALTHY** | Enregistre le commit stable |
+| **DEGRADED** | Envoie email alerte |
+| **DOWN** | Analyse erreur → Trigger Vercel deploy hook → Restart ou rollback Render → Email |
+
+## Configuration
+
+Tout est dans le workflow `.github/workflows/auto-repair.yml`:
+
+| Variable | Valeur |
+|----------|--------|
+| `SERVICE_URL` | `https://kenbot-dashboard-api.onrender.com` |
+| `SMTP_HOST` | `smtp.gmail.com` |
+| `SMTP_PORT` | `587` |
+| `SMTP_USER` | `info@luxuradistribution.com` |
+| `SMTP_PASS` | App password Gmail |
+| `DEPLOY_HOOKS` | URL Vercel Deploy Hook |
+
+## Utilisation Locale
 
 ```bash
 # Verification manuelle
 python monitoring/auto_repair.py
 
-# Mode surveillance continue
+# Mode surveillance continue (Ctrl+C pour arreter)
 python monitoring/auto_repair.py --watch
 
 # Forcer une reparation
 python monitoring/auto_repair.py --repair
 
-# Rollback manuel
+# Rollback au dernier commit stable
 python monitoring/auto_repair.py --rollback
+
+# Voir le status
+python monitoring/auto_repair.py --status
 ```
 
-## Endpoints surveilles
+## Declenchement Manuel (GitHub)
 
-| Endpoint | Critique | Description |
-|----------|----------|-------------|
-| `/api/health` | Oui | Sante globale du service |
-| `/api/evaluations` | Oui | Liste des evaluations |
-| `/api/wholesale-contacts` | Non | Contacts wholesale |
-
-## Patterns d'erreurs detectes
-
-| Pattern | Action |
-|---------|--------|
-| `ModuleNotFoundError` | Rollback vers stable |
-| `No open ports` | Rollback vers stable |
-| `connection.*timeout` | Restart service |
+1. Allez dans **Actions** > **Kenbot Auto-Repair Monitor**
+2. Cliquez **Run workflow**
+3. Choisissez: `check`, `repair`, `rollback`, ou `status`
 
 ---
-*Kennebec Auto - Systeme de monitoring automatique*
+
+*Kennebec Auto — Systeme de monitoring automatique*

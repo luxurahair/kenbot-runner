@@ -5,56 +5,45 @@
 ## Projets
 
 ### 1. kenbot-runner (Bot FB — Render Cron) - EN PRODUCTION
-- Scrape Kennebec > IA > Facebook
-- Detection par STOCK: NEW / SOLD / UNSOLD / PRICE_CHANGED / PHOTOS_ADDED / CLEANUP
-- Footer pro Daniel Giroux + hashtags SEO dynamiques + lien tinyurl.com/EvaluerMonAuto
-- Nettoyeur post-IA (_clean_ai_output)
-- PROFIL DU VEHICULE + CARACTERISTIQUES CERTIFIEES
-- Meta compare (site vs FB) en fin de run
+- Scrape Kennebec > IA > Facebook (toutes les 60 min)
+- Detection: NEW / SOLD / UNSOLD / PRICE_CHANGED / PHOTOS_ADDED / CLEANUP
+- Footer Daniel Giroux + hashtags SEO + lien tinyurl.com/EvaluerMonAuto
+- Pipeline AI: 10 styles intro, 43+ cliches interdits
+- VIN decode NHTSA + Window Sticker Stellantis
 
 ### 2. kenbot-dashboard (Dashboard — Vercel + Render) - EN PRODUCTION
-- URL: https://kenbot-dashboard-five.vercel.app
-- Cockpit, Inventaire, Posts FB, Events, Architecture, Changelog
-- Reprise/Evaluations style Torque Management integrees
-- Role-based auth (admin, directeur, conseiller)
+- URL admin: https://kenbot-dashboard-five.vercel.app
+- URL client: https://kenbot-dashboard-five.vercel.app/reprise
+- Evaluations reprise avec photos, wholesale inline, prix directeur
+- Role-based auth (admin, directeur, conseiller) + mdp oublie
 - GPT-4o Vision VIN scanning
-- Supabase Storage (reprise-photos bucket)
-- Wholesale contacts + email sending
-- Auto-repair monitoring system (GitHub Actions)
+- Monitoring: /api/health, /api/cron/status, /api/services/status
 
-### 3. Pipeline OpenAI Unifie - V1.0 COMPLETE
-- Module centralise: pipeline/ (client.py, prompts.py, generator.py, cliches.py)
-- ZERO modification a runner_cron_prod.py
-- Backup complet: backup_2026-04-16/
-- Tests: 80/80 (avec API OpenAI)
-- 10 styles d'intro differents (nouvelle arrivage, question, chiffre, rarete, prix, etc.)
-- Interdiction stricte de commencer par experience/passion vendeur
-- 43+ cliches interdits (dont "faire tourner les tetes", "passionne depuis...")
-- Lien reprise: tinyurl.com/EvaluerMonAuto
+### 3. Auto-Repair (GitHub Actions) - EN PRODUCTION
+- Health check toutes les 5 min
+- Auto-repair + rollback + Vercel deploy hook + email alerte
+- DEPLOY_HOOKS integre depuis variables Render
 
-## Events du Cron
-- NEW: Nouveau vehicule
-- PRICE_CHANGED: Baisse de prix
-- PHOTOS_ADDED: Photos ajoutees (remplace NO_PHOTO)
-- SOLD: Vehicule vendu (prefixe VENDU)
-- UNSOLD: Faux vendu corrige (restauration)
+### 4. Pipeline AI Unifie (pipeline/) - V1.0
+- Client OpenAI centralise (singleton)
+- Prompts centralises + 10 styles intro
+- 43+ cliches interdits
+- 80/80 tests
 
 ## Completed (2026-04-16)
-- Kit Auto-Repair: monitoring/auto_repair.py + .github/workflows/auto-repair.yml
-- Health endpoint /api/health ajoute au backend
-- SMTP notifications testees et fonctionnelles
-- Pipeline OpenAI unifie: pipeline/ module
-- Tests complets 80/80: tests/test_pipeline_generation.py
-- Backup complet: backup_2026-04-16/ (9 fichiers + STRUCTURE.md)
-- Lamborghini Huracan/Urus ajoutes a vehicle_intelligence.py
-- Intros variees et centrees sur le vehicule (plus de "passionne depuis 20 ans")
-- Lien reprise tinyurl.com/EvaluerMonAuto dans le footer
+- Kit Auto-Repair avec DEPLOY_HOOKS Vercel
+- Pipeline AI unifie
+- Formulaire reprise ameliore (VIN label, commentaire etat, barre progression photos, garantie prolongee)
+- Wholesale inline dans liste evaluations
+- Mot de passe: voir/cacher, oublie (email reset), changement
+- Email admin: danielgiroux007@gmail.com dans Supabase
+- Endpoints: /api/cron/status, /api/services/status
+- README.md complet + kenbot-dashboard/README.md + monitoring/README.md
 
 ## Backlog
-- P0: Deployer via "Save to Github" + ajouter secrets GitHub (SMTP_USER, SMTP_PASS)
-- P1: Domaine custom (AchatVehiculeQC.ca ou reprise.danielgiroux.ca)
+- P1: Domaine custom (AchatVehiculeQC.ca / reprise.danielgiroux.ca)
 - P2: Google Business Profile API
 - P2: Collecteur reactions FB
 - P3: Decoupage runner_cron_prod.py en modules
-- P3: Refactoring App.js (>1800 lignes) en composants separes
+- P3: Refactoring App.js en composants separes
 - P3: Decoupage server.py en routes modulaires
