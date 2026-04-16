@@ -30,6 +30,7 @@ env:
   SMTP_PORT: "587"
   SMTP_USER: info@luxuradistribution.com
   SMTP_PASS: zgvsfiajermjqpgh
+  DEPLOY_HOOKS: https://api.vercel.com/v1/integrations/deploy/prj_FBYVaVmG32m2UMe1pwmlPN2lDAZv/0cBqEJL8UW
 
 jobs:
   health-check:
@@ -130,14 +131,14 @@ jobs:
 
           if echo "$ERROR_TEXT" | grep -qi "timeout\|connection"; then
             echo "Action: restart"
-            curl -s -X POST "https://api.vercel.com/v1/integrations/deploy/prj_FBYVaVmG32m2UMe1pwmlPN2lDAZv/0cBqEJL8UW" || echo "Vercel hook failed"
+            curl -s -X POST "$DEPLOY_HOOKS" || echo "Vercel hook failed"
             git config user.name "Kenbot Auto-Repair"
             git config user.email "bot@kennebec.auto"
             git commit --allow-empty -m "Auto-repair: trigger restart $(date +%s)"
             git push
           else
             echo "Action: rollback"
-            curl -s -X POST "https://api.vercel.com/v1/integrations/deploy/prj_FBYVaVmG32m2UMe1pwmlPN2lDAZv/0cBqEJL8UW" || echo "Vercel hook failed"
+            curl -s -X POST "$DEPLOY_HOOKS" || echo "Vercel hook failed"
             STABLE_COMMIT=$(git log --oneline -10 | grep -v "Auto-repair\|fix:" | head -1 | cut -d' ' -f1)
             if [ -n "$STABLE_COMMIT" ]; then
               echo "Rolling back to $STABLE_COMMIT"

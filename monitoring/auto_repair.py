@@ -67,7 +67,7 @@ STATE_FILE = Path(__file__).parent / ".repair_state.json"
 STABLE_COMMIT_FILE = Path(__file__).parent / ".last_stable_commit"
 
 # Vercel Deploy Hook (declenche un rebuild frontend automatiquement)
-VERCEL_DEPLOY_HOOK = os.getenv("DEPLOY_HOOKS", "https://api.vercel.com/v1/integrations/deploy/prj_FBYVaVmG32m2UMe1pwmlPN2lDAZv/0cBqEJL8UW")
+VERCEL_DEPLOY_HOOK = os.getenv("DEPLOY_HOOKS", "")
 
 # Email configuration (utilise les variables SMTP du Render)
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
