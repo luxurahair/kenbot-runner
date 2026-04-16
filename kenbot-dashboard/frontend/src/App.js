@@ -1543,6 +1543,7 @@ function RepriseTab({ standalone, user }) {
   const [vinNhtsaTrims, setVinNhtsaTrims] = useState([]);
   const [photos, setPhotos] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({}); // { idx: 0-100 }
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [evalId] = useState(() => Math.random().toString(36).slice(2));
@@ -1551,8 +1552,8 @@ function RepriseTab({ standalone, user }) {
     type_transaction: '', solde_du: false, solde_montant: '', institution: '', versement: '', frequence_versement: '', interet: '', provenance: '', notes_client: '',
     vin: '', km: '', couleur_ext: '', couleur_int: '', nombre_cles: '1',
     options: [], etat_general: 3, etat_parebrise: 'Bon etat', etat_mecanique: '', dommages: [],
-    garantie_constructeur: false, garantie_constructeur_date: '', garantie_prolongee: false, garantie_prolongee_detail: '',
-    commentaires: '',
+    garantie_constructeur: false, garantie_constructeur_date: '', garantie_prolongee: false, garantie_prolongee_detail: '', garantie_prolongee_date: '', garantie_prolongee_fournisseur: '',
+    commentaires: '', etat_commentaire: '',
   });
   const up = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const togOpt = o => setForm(f => ({ ...f, options: f.options.includes(o) ? f.options.filter(x => x !== o) : [...f.options, o] }));
@@ -1615,13 +1616,23 @@ function RepriseTab({ standalone, user }) {
     const files = Array.from(e.target.files).slice(0, 10 - photos.length);
     if (!files.length) return;
     setUploading(true);
-    for (const file of files) {
+    for (let fi = 0; fi < files.length; fi++) {
+      const file = files[fi];
+      const progressKey = `up_${Date.now()}_${fi}`;
+      setUploadProgress(p => ({ ...p, [progressKey]: 0 }));
       const compressed = await compressImage(file);
+      setUploadProgress(p => ({ ...p, [progressKey]: 30 }));
       const fd = new FormData(); fd.append('file', new File([compressed], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' })); fd.append('evaluation_id', evalId);
       try {
+        setUploadProgress(p => ({ ...p, [progressKey]: 60 }));
         const r = await fetch(`${API}/api/evaluations/upload-photo`, { method: 'POST', body: fd });
-        if (r.ok) { const d = await r.json(); setPhotos(p => [...p, { url: d.url, name: file.name }]); }
+        if (r.ok) {
+          const d = await r.json();
+          setUploadProgress(p => ({ ...p, [progressKey]: 100 }));
+          setPhotos(p => [...p, { url: d.url, name: file.name }]);
+        }
       } catch (err) { console.error(err); }
+      setTimeout(() => setUploadProgress(p => { const n = { ...p }; delete n[progressKey]; return n; }), 800);
     }
     setUploading(false);
   };
@@ -1731,9 +1742,11 @@ function RepriseTab({ standalone, user }) {
 
       {/* 2. VEHICULE */}
       <div style={rs.card}><div style={rs.cardTitle}>2. Votre vehicule</div>
+        <label style={rs.label}>Numero de serie (VIN)</label>
+        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', marginTop: 0 }}>Entrez ou scannez le numero de serie de votre vehicule (17 caracteres)</p>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <input style={{ ...rs.input, flex: 1, minWidth: '160px', fontFamily: 'IBM Plex Mono', textTransform: 'uppercase' }} value={form.vin} onChange={e => { up('vin', e.target.value.toUpperCase().slice(0, 17)); setVinError(''); }} maxLength={17} placeholder="Entrez le VIN (17 caracteres)" data-testid="reprise-vin" />
-          <input type="file" accept="image/*" onChange={handleVinScan} style={{ display: 'none' }} id="vin-scan-input" />
+          <input style={{ ...rs.input, flex: 1, minWidth: '160px', fontFamily: 'IBM Plex Mono', textTransform: 'uppercase' }} value={form.vin} onChange={e => { up('vin', e.target.value.toUpperCase().slice(0, 17)); setVinError(''); }} maxLength={17} placeholder="Ex: 1C6SRFTT7MN517688" data-testid="reprise-vin" />
+          <input type="file" accept="image/*" capture="environment" onChange={handleVinScan} style={{ display: 'none' }} id="vin-scan-input" />
           <label htmlFor="vin-scan-input" style={{ ...rs.btnSecondary, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', cursor: vinScanning ? 'wait' : 'pointer', opacity: vinScanning ? 0.6 : 1, whiteSpace: 'nowrap' }} data-testid="vin-scan-btn">{vinScanning ? 'Lecture...' : 'Scanner'}</label>
           <button style={rs.btnPrimary} onClick={decodeVin} disabled={vinLoading} data-testid="reprise-decode">{vinLoading ? '...' : 'Decoder'}</button>
         </div>
@@ -1785,8 +1798,13 @@ function RepriseTab({ standalone, user }) {
       </div>
 
       {/* 4. ETAT */}
-      <div style={rs.card}><div style={rs.cardTitle}>4. Comment decririez-vous l'etat de votre vehicule?</div>
+      <div style={rs.card}><div style={rs.cardTitle}>4. Decrivez l'etat de votre vehicule</div>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem', marginTop: 0 }}>Selectionnez l'etat general de votre vehicule</p>
         <div style={rs.etatBar}>{ETATS_GENERAL.map(e => <div key={e.value} style={rs.etatSeg(e.color, form.etat_general >= e.value)} onClick={() => up('etat_general', e.value)} data-testid={`reprise-etat-${e.value}`}>{e.label}</div>)}</div>
+        <div style={{ marginTop: '0.75rem' }}>
+          <label style={rs.label}>Commentaires sur l'etat (optionnel)</label>
+          <textarea style={{ ...rs.input, minHeight: '70px', resize: 'vertical' }} value={form.etat_commentaire || ''} onChange={e => up('etat_commentaire', e.target.value)} placeholder="Decrivez l'etat general de votre vehicule, tout detail pertinent..." />
+        </div>
       </div>
       <div style={rs.card}><div style={rs.cardTitle}>Etat du pare-brise</div>
         <div>{ETATS_PAREBRISE.map(e => <span key={e} style={rs.chip(form.etat_parebrise === e)} onClick={() => up('etat_parebrise', e)}>{e}</span>)}</div>
@@ -1803,10 +1821,21 @@ function RepriseTab({ standalone, user }) {
       <div style={rs.card}><div style={rs.cardTitle}>5. Photos de votre vehicule ({photos.length}/10)</div>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>Prenez des photos des 4 cotes, de l'interieur, du tableau de bord et de tout defaut visible</p>
         <input type="file" accept="image/*" multiple onChange={handlePhotos} style={{ display: 'none' }} id="reprise-photo-input" />
-        <label htmlFor="reprise-photo-input" style={{ ...rs.btnSecondary, display: 'block', textAlign: 'center', cursor: 'pointer', padding: '1.5rem' }}>{uploading ? 'Envoi...' : 'Ajouter des photos'}</label>
+        <label htmlFor="reprise-photo-input" style={{ ...rs.btnSecondary, display: 'block', textAlign: 'center', cursor: 'pointer', padding: '1.5rem' }}>{uploading ? 'Envoi en cours...' : 'Ajouter des photos'}</label>
+        {/* Upload progress bars */}
+        {Object.entries(uploadProgress).length > 0 && (
+          <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {Object.entries(uploadProgress).map(([key, pct]) => (
+              <div key={key} style={{ background: 'var(--surface-secondary, #1a1a2e)', borderRadius: '4px', overflow: 'hidden', height: '22px', position: 'relative' }}>
+                <div style={{ width: `${pct}%`, height: '100%', background: pct >= 100 ? '#22c55e' : '#0ea5e9', transition: 'width 0.3s ease', borderRadius: '4px' }} />
+                <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', fontWeight: 700, color: '#fff' }}>{pct >= 100 ? 'Termine!' : `${pct}%`}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {photos.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '0.5rem', marginTop: '0.75rem' }}>
-            {photos.map((p, i) => <div key={i} style={{ position: 'relative' }}><img src={p.url} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--border)' }} /><button onClick={() => setPhotos(pr => pr.filter((_, j) => j !== i))} style={{ position: 'absolute', top: 2, right: 2, background: 'var(--accent-red)', color: '#fff', border: 'none', borderRadius: '50%', width: 20, height: 20, fontSize: '0.6rem', cursor: 'pointer' }}>✕</button></div>)}
+            {photos.map((p, i) => <div key={i} style={{ position: 'relative' }}><img src={p.url} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--border)' }} /><button onClick={() => setPhotos(pr => pr.filter((_, j) => j !== i))} style={{ position: 'absolute', top: 2, right: 2, background: 'var(--accent-red)', color: '#fff', border: 'none', borderRadius: '50%', width: 20, height: 20, fontSize: '0.6rem', cursor: 'pointer' }}>x</button></div>)}
           </div>
         )}
       </div>
@@ -1814,9 +1843,17 @@ function RepriseTab({ standalone, user }) {
       {/* 6. GARANTIES */}
       <div style={rs.card}><div style={rs.cardTitle}>6. Garanties</div>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.5rem' }}><input type="checkbox" checked={form.garantie_constructeur} onChange={e => up('garantie_constructeur', e.target.checked)} /> La garantie du fabricant est-elle encore valide?</label>
-        {form.garantie_constructeur && <div style={{ marginBottom: '0.75rem' }}><label style={rs.label}>Date expiration</label><input style={rs.input} type="date" value={form.garantie_constructeur_date} onChange={e => up('garantie_constructeur_date', e.target.value)} /></div>}
+        {form.garantie_constructeur && <div style={{ marginBottom: '0.75rem', marginLeft: '1.5rem' }}><label style={rs.label}>Date d'expiration de la garantie fabricant</label><input style={rs.input} type="date" value={form.garantie_constructeur_date} onChange={e => up('garantie_constructeur_date', e.target.value)} /></div>}
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={form.garantie_prolongee} onChange={e => up('garantie_prolongee', e.target.checked)} /> Avez-vous une garantie prolongee?</label>
-        {form.garantie_prolongee && <div style={{ marginTop: '0.5rem' }}><label style={rs.label}>Details</label><textarea style={{ ...rs.input, minHeight: '60px' }} value={form.garantie_prolongee_detail} onChange={e => up('garantie_prolongee_detail', e.target.value)} placeholder="Fournisseur, couverture..." /></div>}
+        {form.garantie_prolongee && (
+          <div style={{ marginTop: '0.5rem', marginLeft: '1.5rem', padding: '0.75rem', background: 'var(--surface-secondary, #1a1a2e)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+            <div style={rs.row}>
+              <div><label style={rs.label}>Prolongee jusqu'a quelle date?</label><input style={rs.input} type="date" value={form.garantie_prolongee_date || ''} onChange={e => up('garantie_prolongee_date', e.target.value)} /></div>
+              <div><label style={rs.label}>Fournisseur de la garantie</label><input style={rs.input} value={form.garantie_prolongee_fournisseur || ''} onChange={e => up('garantie_prolongee_fournisseur', e.target.value)} placeholder="Ex: Sym-Tech, Global Warranty..." /></div>
+            </div>
+            <div style={{ marginTop: '0.5rem' }}><label style={rs.label}>Details / couverture</label><textarea style={{ ...rs.input, minHeight: '60px' }} value={form.garantie_prolongee_detail} onChange={e => up('garantie_prolongee_detail', e.target.value)} placeholder="Quel type de couverture, quelles exclusions..." /></div>
+          </div>
+        )}
       </div>
 
       {/* 7. NOTES */}
