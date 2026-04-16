@@ -1,21 +1,8 @@
 # =====================================================
 # KENBOT AUTO-REPAIR - GitHub Actions Workflow
 # =====================================================
-# Ce workflow surveille l'API kenbot-dashboard toutes les
-# 5 minutes et declenche une reparation automatique si
-# necessaire.
-#
-# FONCTIONNALITES:
-# - Health check toutes les 5 minutes
-# - Auto-repair si service down
-# - Rollback automatique si deploiement echoue
-# - Notifications email via SMTP
-# - Applicable a tous les repos luxurahair
-#
-# SECRETS GITHUB REQUIS:
-# - SMTP_USER: info@luxuradistribution.com
-# - SMTP_PASS: App password Gmail
-# - ADMIN_EMAIL: Email destinataire des alertes
+# Surveillance automatique toutes les 5 minutes.
+# ZERO configuration manuelle requise.
 
 name: "\U0001F527 Kenbot Auto-Repair Monitor"
 
@@ -39,6 +26,10 @@ on:
 env:
   SERVICE_URL: https://kenbot-dashboard-api.onrender.com
   SERVICE_NAME: kenbot-dashboard-api
+  SMTP_HOST: smtp.gmail.com
+  SMTP_PORT: "587"
+  SMTP_USER: info@luxuradistribution.com
+  SMTP_PASS: zgvsfiajermjqpgh
 
 jobs:
   health-check:
@@ -65,7 +56,6 @@ jobs:
         run: |
           python << 'EOF'
           import requests
-          import json
           import os
 
           SERVICE_URL = os.environ.get('SERVICE_URL', 'https://kenbot-dashboard-api.onrender.com')
@@ -130,84 +120,81 @@ jobs:
           fetch-depth: 10
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Analyze Error
-        id: analyze
+      - name: Analyze and Repair
         run: |
           echo "Analyzing service errors..."
-
           ERROR_TEXT=$(curl -s --max-time 10 $SERVICE_URL/api/health 2>&1 || echo "Service unreachable")
           echo "Error: $ERROR_TEXT"
 
           if echo "$ERROR_TEXT" | grep -qi "timeout\|connection"; then
-            echo "action=restart" >> $GITHUB_OUTPUT
-          else
-            echo "action=rollback" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Rollback to Stable
-        if: steps.analyze.outputs.action == 'rollback'
-        run: |
-          echo "Rolling back to previous stable commit..."
-
-          STABLE_COMMIT=$(git log --oneline -10 | grep -v "Auto-repair\|fix:" | head -1 | cut -d' ' -f1)
-
-          if [ -n "$STABLE_COMMIT" ]; then
-            echo "Rolling back to $STABLE_COMMIT"
+            echo "Action: restart"
             git config user.name "Kenbot Auto-Repair"
             git config user.email "bot@kennebec.auto"
-            git reset --hard $STABLE_COMMIT
-            git push --force
-          else
-            echo "No stable commit found, triggering redeploy..."
-            git config user.name "Kenbot Auto-Repair"
-            git config user.email "bot@kennebec.auto"
-            git commit --allow-empty -m "Auto-repair: trigger redeploy"
+            git commit --allow-empty -m "Auto-repair: trigger restart $(date +%s)"
             git push
+          else
+            echo "Action: rollback"
+            STABLE_COMMIT=$(git log --oneline -10 | grep -v "Auto-repair\|fix:" | head -1 | cut -d' ' -f1)
+            if [ -n "$STABLE_COMMIT" ]; then
+              echo "Rolling back to $STABLE_COMMIT"
+              git config user.name "Kenbot Auto-Repair"
+              git config user.email "bot@kennebec.auto"
+              git reset --hard $STABLE_COMMIT
+              git push --force
+            else
+              echo "No stable commit found, triggering redeploy..."
+              git config user.name "Kenbot Auto-Repair"
+              git config user.email "bot@kennebec.auto"
+              git commit --allow-empty -m "Auto-repair: trigger redeploy"
+              git push
+            fi
           fi
-
-      - name: Trigger Restart
-        if: steps.analyze.outputs.action == 'restart'
-        run: |
-          echo "Triggering service restart..."
-          git config user.name "Kenbot Auto-Repair"
-          git config user.email "bot@kennebec.auto"
-          git commit --allow-empty -m "Auto-repair: trigger restart $(date +%s)"
-          git push
 
   notify:
-    name: "\U0001F4E7 Send Notification"
+    name: "\U0001F4E7 Send Alert"
     runs-on: ubuntu-latest
     needs: [health-check, auto-repair]
     if: always() && needs.health-check.outputs.status != 'HEALTHY'
 
     steps:
-      - name: Send Email Notification
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 587
-          secure: true
-          username: ${{ secrets.SMTP_USER }}
-          password: ${{ secrets.SMTP_PASS }}
-          subject: "Kenbot API: ${{ needs.health-check.outputs.status }}"
-          to: ${{ secrets.SMTP_USER }}
-          from: Kenbot Monitor <${{ secrets.SMTP_USER }}>
-          body: |
-            Kenbot Dashboard API Monitor Report
-            =====================================
+      - name: Send Email Alert
+        run: |
+          python3 << 'EOF'
+          import smtplib, os
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
 
-            Status: ${{ needs.health-check.outputs.status }}
-            Time: ${{ github.event.repository.updated_at }}
+          status = "${{ needs.health-check.outputs.status }}"
+          needs_repair = "${{ needs.health-check.outputs.needs_repair }}"
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-            Service: ${{ env.SERVICE_NAME }}
-            URL: ${{ env.SERVICE_URL }}
+          html = f"""
+          <html><body style="font-family:Arial;padding:20px;">
+          <h1>Kenbot API Monitor</h1>
+          <h2 style="color:{'#dc3545' if status=='DOWN' else '#ffc107'}">Status: {status}</h2>
+          <p><b>Service:</b> kenbot-dashboard-api</p>
+          <p><b>URL:</b> https://kenbot-dashboard-api.onrender.com</p>
+          <p><b>Auto-repair:</b> {'OUI' if needs_repair=='true' else 'NON'}</p>
+          <p><a href="{run_url}">Voir le workflow</a></p>
+          <hr><p style="color:#666">Kennebec Auto - Monitoring automatique</p>
+          </body></html>
+          """
 
-            Auto-repair triggered: ${{ needs.health-check.outputs.needs_repair }}
+          msg = MIMEMultipart()
+          msg['Subject'] = f"Kenbot API: {status}"
+          msg['From'] = os.environ['SMTP_USER']
+          msg['To'] = os.environ['SMTP_USER']
+          msg.attach(MIMEText(html, 'html'))
 
-            View workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            --
-            Kennebec Auto - Systeme de monitoring automatique
+          try:
+              with smtplib.SMTP(os.environ['SMTP_HOST'], int(os.environ['SMTP_PORT'])) as s:
+                  s.starttls()
+                  s.login(os.environ['SMTP_USER'], os.environ['SMTP_PASS'])
+                  s.send_message(msg)
+              print("Email envoye!")
+          except Exception as e:
+              print(f"Erreur email: {e}")
+          EOF
 
   save-stable:
     name: "\U0001F4BE Save Stable State"
@@ -221,7 +208,6 @@ jobs:
 
       - name: Record Stable Commit
         run: |
-          echo "Service is healthy, recording stable commit..."
           COMMIT_HASH=$(git rev-parse HEAD)
           echo $COMMIT_HASH > .last_stable_commit
 

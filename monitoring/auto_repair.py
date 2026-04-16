@@ -70,8 +70,8 @@ STABLE_COMMIT_FILE = Path(__file__).parent / ".last_stable_commit"
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "info@luxuradistribution.com")
-SMTP_PASS = os.getenv("SMTP_PASS")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", SMTP_USER)
+SMTP_PASS = os.getenv("SMTP_PASS", "zgvsfiajermjqpgh")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "info@luxuradistribution.com")
 
 # GitHub configuration
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
