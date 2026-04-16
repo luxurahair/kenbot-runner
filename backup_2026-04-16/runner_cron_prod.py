@@ -1,0 +1,1794 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+runner_cron_prod.py
+
+Version propre et robuste, basée sur ton flux "simple qui publie" :
+- Scrape 3 pages Kennebec
+- Détection NEW / PRICE_CHANGED / PHOTOS_ADDED
+- StickerToAd prioritaire pour Stellantis si PDF valide
+- Intro AI optionnelle au-dessus du texte généré
+- Anti-duplicate par cooldown sur stock
+- Validation texte stricte avant publication / update
+- Retries sur téléchargement des photos
+- Meta compare lancé en fin de run sans jamais casser le cron
+- PHOTOS_ADDED: Supprimer + Recréer le post avec les vraies photos
+"""
+
+import os
+import time
+import random
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+from datetime import datetime, timezone, timedelta
+
+import requests
+from dotenv import load_dotenv
+
+from kennebec_scrape import (
+    fetch_html,
+    parse_inventory_listing_urls,
+    parse_vehicle_detail_simple,
+    slugify,
+)
+from text_engine_client import generate_facebook_text
+from fb_api import (
+    publish_photos_unpublished,
+    create_post_with_attached_media,
+    update_post_text,
+    delete_post,
+    fetch_page_posts,
+    count_post_photos,
+)
+from supabase_db import (
+    get_client,
+    get_inventory_map,
+    get_posts_map,
+    upsert_post,
+    log_event,
+    utc_now_iso,
+    upload_bytes_to_storage,
+    upsert_sticker_pdf,
+)
+from sticker_to_ad import extract_spans_pdfminer, extract_option_groups_from_spans
+from ad_builder import build_ad as build_ad_from_options
+
+# Import des modules centralisés pour footer et AI
+from footer_utils import add_footer_if_missing, has_footer, get_dealer_footer
+try:
+    from llm import generate_ad_text, humanize_text, generate_intro_only
+except ImportError:
+    generate_ad_text = None
+    humanize_text = None
+    generate_intro_only = None
+
+# Import llm_v3 - generation intelligente par vehicule
+try:
+    from llm_v3 import generate_smart_text as generate_smart_text_v3
+    from vehicle_intelligence import build_vehicle_context
+except ImportError:
+    generate_smart_text_v3 = None
+    build_vehicle_context = None
+
+# Import vin_decoder - decodage VIN via NHTSA
+try:
+    from vin_decoder import decode_vin, format_specs_for_prompt
+except ImportError:
+    decode_vin = None
+    format_specs_for_prompt = None
+
+try:
+    from meta_compare_supabase import meta_compare as meta_compare_fn
+except Exception:
+    meta_compare_fn = None
+
+try:
+    from playwright.sync_api import sync_playwright
+except Exception:
+    sync_playwright = None
+
+# -------------------------
+# Env + Config
+# -------------------------
+for name in (".env.local", ".kenbot_env", ".env"):
+    p = Path(name)
+    if p.exists():
+        load_dotenv(p, override=False)
+        break
+
+BASE_URL = os.getenv("KENBOT_BASE_URL", "https://www.kennebecdodge.ca").rstrip("/")
+INVENTORY_PATH = os.getenv("KENBOT_INVENTORY_PATH", "/fr/inventaire-occasion/").strip()
+TEXT_ENGINE_URL = (os.getenv("KENBOT_TEXT_ENGINE_URL") or "").strip()
+FB_PAGE_ID = (os.getenv("KENBOT_FB_PAGE_ID") or os.getenv("FB_PAGE_ID") or "").strip()
+FB_TOKEN = (os.getenv("KENBOT_FB_ACCESS_TOKEN") or os.getenv("FB_PAGE_ACCESS_TOKEN") or "").strip()
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
+SUPABASE_KEY = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+
+STICKERS_BUCKET = os.getenv("SB_BUCKET_STICKERS", "kennebec-stickers").strip()
+OUTPUTS_BUCKET = os.getenv("SB_BUCKET_OUTPUTS", "kennebec-outputs").strip()
+
+MAX_TARGETS = int(os.getenv("KENBOT_MAX_TARGETS", "10"))
+MAX_PHOTOS = int(os.getenv("KENBOT_MAX_PHOTOS", "15"))
+POST_PHOTOS = int(os.getenv("KENBOT_POST_PHOTOS", "10"))
+SLEEP_BETWEEN = int(os.getenv("KENBOT_SLEEP_BETWEEN_POSTS", "30"))
+PRICE_CHANGE_THRESHOLD = int(os.getenv("KENBOT_PRICE_CHANGE_THRESHOLD", "200"))
+USE_STICKER_AD = os.getenv("KENBOT_FB_USE_STICKER_AD", "1").strip() == "1"
+# USE_AI activé automatiquement si OPENAI_API_KEY est présent
+USE_AI = os.getenv("USE_AI", "1" if os.getenv("OPENAI_API_KEY", "").strip() else "0").strip() == "1"
+MIN_POST_TEXT_LEN = int(os.getenv("KENBOT_MIN_POST_TEXT_LEN", "300"))
+POST_COOLDOWN_DAYS = int(os.getenv("KENBOT_POST_COOLDOWN_DAYS", "7"))
+PHOTO_RETRIES = int(os.getenv("KENBOT_PHOTO_RETRIES", "3"))
+ALLOW_NO_PHOTO = os.getenv("KENBOT_ALLOW_NO_PHOTO", "0").strip() == "1"
+NO_PHOTO_BUCKET = (os.getenv("KENBOT_NO_PHOTO_BUCKET") or OUTPUTS_BUCKET).strip()
+NO_PHOTO_PATH = (os.getenv("KENBOT_NO_PHOTO_PATH") or "assets/no_photo.jpg").strip().lstrip("/")
+# PHOTOS_ADDED / REFRESH_NO_PHOTO: Utilise les variables existantes de votre système
+REFRESH_NO_PHOTO_DAILY = os.getenv("KENBOT_REFRESH_NO_PHOTO_DAILY", "1").strip() == "1"
+REFRESH_NO_PHOTO_LIMIT = int(os.getenv("KENBOT_REFRESH_NO_PHOTO_LIMIT", "25"))
+if not TEXT_ENGINE_URL:
+    raise SystemExit("KENBOT_TEXT_ENGINE_URL manquant")
+if not FB_PAGE_ID or not FB_TOKEN:
+    raise SystemExit("FB creds manquants")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise SystemExit("Supabase creds manquants")
+
+SESSION = requests.Session()
+SESSION.headers.update(
+    {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept-Language": "fr-CA,fr;q=0.9,en;q=0.8",
+    }
+)
+
+TMP_PHOTOS = Path("/tmp/kenbot_photos")
+TMP_PHOTOS.mkdir(parents=True, exist_ok=True)
+
+# -------------------------
+# Helpers
+# -------------------------
+def _run_id() -> str:
+    return time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+
+def _is_pdf_ok(blob: bytes) -> bool:
+    if not blob:
+        return False
+    bb = blob.lstrip()
+    return bb.startswith(b"%PDF") and b"%%EOF" in bb[-4096:]
+
+def _is_stellantis_vin(vin: str) -> bool:
+    vin = (vin or "").strip().upper()
+    return len(vin) == 17 and vin.startswith(("1C", "2C", "3C", "ZAC", "ZFA"))
+
+# Table de décodage année VIN (position 10, index 9)
+_VIN_YEAR_MAP = {
+    "J": 2018, "K": 2019, "L": 2020, "M": 2021,
+    "N": 2022, "P": 2023, "R": 2024, "S": 2025, "T": 2026,
+    "V": 2027, "W": 2028, "X": 2029, "Y": 2030,
+    # Aussi les années plus anciennes
+    "A": 2010, "B": 2011, "C": 2012, "D": 2013,
+    "E": 2014, "F": 2015, "G": 2016, "H": 2017,
+}
+
+def _extract_year(v: Dict[str, Any]) -> int:
+    """Extrait l'année du véhicule depuis le titre ou le VIN."""
+    # Méthode 1: Titre (ex: "Dodge Hornet 2024")
+    title = (v.get("title") or "").strip()
+    import re as _re
+    m = _re.search(r"\b(20[12]\d)\b", title)
+    if m:
+        return int(m.group(1))
+    # Méthode 2: VIN position 10 (index 9)
+    vin = (v.get("vin") or "").strip().upper()
+    if len(vin) >= 10:
+        yr_char = vin[9]
+        if yr_char in _VIN_YEAR_MAP:
+            return _VIN_YEAR_MAP[yr_char]
+    return 0
+
+def _is_stellantis_2018_plus(v: Dict[str, Any]) -> bool:
+    """Retourne True si le véhicule est Stellantis ET année >= 2018."""
+    vin = (v.get("vin") or "").strip().upper()
+    if not _is_stellantis_vin(vin):
+        return False
+    year = _extract_year(v)
+    return year >= 2018
+
+def _norm_text(value: Any, suffix: str = "") -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (int, float)):
+        base = f"{int(value):,}".replace(",", " ")
+        return f"{base} {suffix}".strip()
+    txt = str(value).strip()
+    return txt
+
+def _vehicle_price_text(v: Dict[str, Any]) -> str:
+    return _norm_text(v.get("price") if v.get("price") not in (None, "") else v.get("price_int"), "$")
+
+def _vehicle_mileage_text(v: Dict[str, Any]) -> str:
+    raw = v.get("mileage")
+    if raw in (None, ""):
+        raw = v.get("km")
+    if raw in (None, ""):
+        raw = v.get("km_int")
+    return _norm_text(raw, "km")
+
+def _run_meta_compare_safe() -> None:
+    if not meta_compare_fn:
+        print("[META SKIP] meta_compare_supabase.meta_compare introuvable", flush=True)
+        return
+    try:
+        meta_compare_fn()
+        print("[META] Comparaison meta vs site exécutée", flush=True)
+    except Exception as e:
+        print(f"[META ERROR] {e}", flush=True)
+
+def _download_photo(url: str, out_path: Path, retries: int = 3) -> bool:
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            r = SESSION.get(url, timeout=60)
+            if r.status_code == 404:
+                return False
+            r.raise_for_status()
+            out_path.write_bytes(r.content)
+            return out_path.exists() and out_path.stat().st_size > 1024
+        except Exception as e:
+            print(f"[PHOTO RETRY] url={url} attempt={attempt}/{retries} err={e}", flush=True)
+            time.sleep(min(2 * attempt, 6))
+    return False
+
+def _download_photos(sb, stock: str, urls: List[str], limit: int = MAX_PHOTOS) -> List[Path]:
+    out: List[Path] = []
+    stock = (stock or "UNKNOWN").strip().upper()
+    folder = TMP_PHOTOS / stock
+    folder.mkdir(parents=True, exist_ok=True)
+
+    for i, u in enumerate((urls or [])[:limit], start=1):
+        if not u:
+            continue
+
+        ext = ".jpg"
+        low = u.lower()
+        if ".png" in low:
+            ext = ".png"
+        elif ".webp" in low:
+            ext = ".webp"
+
+        p = folder / f"{stock}_{i:02d}{ext}"
+        if p.exists() and p.stat().st_size > 1024:
+            out.append(p)
+            continue
+
+        if _download_photo(u, p, retries=PHOTO_RETRIES):
+            out.append(p)
+
+    if out:
+        return out
+
+    if ALLOW_NO_PHOTO:
+        try:
+            blob = sb.storage.from_(NO_PHOTO_BUCKET).download(NO_PHOTO_PATH)
+            if blob and len(blob) > 1000:
+                p = folder / f"{stock}_NO_PHOTO.jpg"
+                p.write_bytes(blob)
+                print(f"[NO_PHOTO] fallback used: {NO_PHOTO_BUCKET}/{NO_PHOTO_PATH}", flush=True)
+                return [p]
+        except Exception as e:
+            print(f"[NO_PHOTO] fallback failed: {e}", flush=True)
+
+    return []
+
+
+# =========================================================
+# FIX #1: Fonction utilitaire pour détecter le fallback NO_PHOTO
+# =========================================================
+def _is_no_photo_fallback(photos: List[Path]) -> bool:
+    """
+    Détecte si les photos retournées par _download_photos sont
+    le fallback NO_PHOTO (image placeholder).
+    
+    Retourne True si c'est un fallback, False si ce sont de vraies photos.
+    """
+    if not photos:
+        return False
+    # Le fallback est toujours 1 seul fichier avec "NO_PHOTO" dans le nom
+    if len(photos) == 1 and "NO_PHOTO" in photos[0].name:
+        return True
+    return False
+
+
+def ensure_sticker_cached(sb, vin: str, run_id: str) -> Dict[str, Any]:
+    """
+    Retourne {"status": "ok", "path": ..., "source": ..., "pdf_bytes": bytes}
+    ou {"status": "bad/skip", ...}
+    Les pdf_bytes sont inclus pour éviter un double téléchargement.
+    """
+    vin = (vin or "").strip().upper()
+    if len(vin) != 17:
+        return {"status": "skip", "reason": "invalid_vin"}
+
+    ok_path = f"pdf_ok/{vin}.pdf"
+    bad_path = f"pdf_bad/{vin}.pdf"
+
+    # 1. Vérifier le cache Supabase Storage (pdf_ok/)
+    try:
+        blob = sb.storage.from_(STICKERS_BUCKET).download(ok_path)
+        if _is_pdf_ok(blob):
+            print(f"[PDF CACHE HIT] vin={vin} path={ok_path} size={len(blob)}", flush=True)
+            return {"status": "ok", "path": ok_path, "source": "cache_ok", "pdf_bytes": blob}
+    except Exception as e:
+        print(f"[PDF CACHE MISS] vin={vin} err={e}", flush=True)
+
+    # 2. Télécharger depuis Chrysler.com
+    pdf_url = f"https://www.chrysler.com/hostd/windowsticker/getWindowStickerPdf.do?vin={vin}"
+
+    fetched = b""
+    source = ""
+
+    # tentative simple requests
+    try:
+        r = SESSION.get(pdf_url, timeout=30)
+        fetched = r.content or b""
+        if _is_pdf_ok(fetched):
+            source = "requests"
+    except Exception as e:
+        print(f"[PDF] requests failed vin={vin} err={e}", flush=True)
+
+    # fallback playwright si requests a échoué
+    if not source and sync_playwright is not None:
+        for attempt in range(1, 4):
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=True)
+                    context = browser.new_context(
+                        user_agent=(
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/122.0.0.0 Safari/537.36"
+                        ),
+                        locale="fr-CA",
+                    )
+                    page = context.new_page()
+                    response = page.goto(pdf_url, timeout=60000, wait_until="networkidle")
+                    fetched = b""
+                    if response is not None:
+                        try:
+                            fetched = response.body()
+                        except Exception:
+                            fetched = b""
+                    browser.close()
+
+                    if _is_pdf_ok(fetched):
+                        source = f"playwright_attempt_{attempt}"
+                        break
+            except Exception as e:
+                print(f"[PDF] Playwright attempt {attempt} failed vin={vin}: {e}", flush=True)
+                time.sleep(random.uniform(2, 5))
+
+    # 3. Si on a un PDF valide, le sauvegarder
+    if source and _is_pdf_ok(fetched):
+        try:
+            upload_bytes_to_storage(sb, STICKERS_BUCKET, ok_path, fetched, "application/pdf", True)
+        except Exception as e:
+            print(f"[PDF] upload storage failed vin={vin}: {e}", flush=True)
+        # upsert_sticker_pdf séparé pour éviter que FK casse le return
+        try:
+            upsert_sticker_pdf(sb, vin=vin, status="ok", storage_path=ok_path, data=fetched, reason="", run_id=run_id)
+        except Exception as e:
+            print(f"[PDF] upsert_sticker_pdf failed vin={vin}: {e} (non-bloquant)", flush=True)
+        return {"status": "ok", "path": ok_path, "source": source, "pdf_bytes": fetched}
+
+    # 4. Marquer comme bad (mais NE PAS écraser un pdf_ok existant)
+    try:
+        upload_bytes_to_storage(sb, STICKERS_BUCKET, bad_path, b"invalid", "application/octet-stream", True)
+    except Exception:
+        pass
+    try:
+        upsert_sticker_pdf(sb, vin=vin, status="bad", storage_path=bad_path, data=b"invalid", reason="fetch_failed", run_id=run_id)
+    except Exception:
+        pass
+
+    return {"status": "bad", "reason": "fetch_failed"}
+
+def _extract_options_from_sticker_bytes(pdf_bytes: bytes) -> List[Dict[str, Any]]:
+    if not pdf_bytes or not _is_pdf_ok(pdf_bytes):
+        return []
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(pdf_bytes)
+            tmp_path = f.name
+
+        spans = extract_spans_pdfminer(tmp_path) or []
+        groups = extract_option_groups_from_spans(spans) or []
+
+        out: List[Dict[str, Any]] = []
+        for g in groups:
+            if not isinstance(g, dict):
+                continue
+            title = (g.get("title") or "").strip()
+            details = g.get("details") or []
+            if not title:
+                continue
+            if not isinstance(details, list):
+                details = []
+            out.append({"title": title, "details": details})
+        return out
+    except Exception as e:
+        print(f"[WARN] _extract_options_from_sticker_bytes failed: {e}", flush=True)
+        return []
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+def _clean_ai_output(text: str) -> str:
+    """
+    Nettoie le texte généré par l'IA — supprime les blocs techniques
+    avec les ANCIENS noms, garde les NOUVEAUX noms pro.
+    """
+    if not text:
+        return text
+
+    lines = text.split("\n")
+    cleaned = []
+    skip_block = False
+
+    for line in lines:
+        ll = line.strip().lower()
+
+        # Supprimer les ANCIENS noms techniques (l'IA a parfois copié)
+        if any(marker in ll for marker in [
+            "infos vehicule:", "infos véhicule:",
+            "specs vin", "specs décodées", "specs decodees",
+            "fiche technique:", "nhtsa",
+            "[pour ton info", "[ne pas copier",
+        ]):
+            skip_block = True
+            continue
+
+        # Fin du bloc technique (ligne vide ou nouveau contenu)
+        if skip_block:
+            if ll == "" or (line.strip() and line.strip()[0] in "\U0001f525\U0001f4a5\U0001f4ca\U0001f9fe\u2728\u2705\u25ab\U0001f4cc\U0001f4cb\U0001f501\U0001f4f8\u2501\U0001f464\U0001f3c6\U0001f3e2\U0001f4cd\U0001f4de\U0001f4ac\U0001f504\U0001f91d#"):
+                skip_block = False
+            else:
+                continue
+
+        # Supprimer le markdown
+        cleaned_line = line
+        if cleaned_line.strip().startswith("###"):
+            cleaned_line = cleaned_line.replace("###", "").strip()
+        if cleaned_line.strip().startswith("##"):
+            cleaned_line = cleaned_line.replace("##", "").strip()
+        cleaned_line = cleaned_line.replace("**", "")
+
+        cleaned.append(cleaned_line)
+
+    return "\n".join(cleaned).strip()
+
+
+def _ensure_contact_footer(text: str, v: Dict[str, Any] = None) -> str:
+    """Nettoie le texte IA puis ajoute le footer avec hashtags SEO dynamiques."""
+    text = _clean_ai_output(text)
+    if v:
+        seo_tags = _build_seo_hashtags(v)
+        footer = get_dealer_footer(hashtags=seo_tags)
+    else:
+        footer = None
+    return add_footer_if_missing(text, footer=footer)
+    """Ajoute le footer avec hashtags SEO dynamiques."""
+    if v:
+        seo_tags = _build_seo_hashtags(v)
+        footer = get_dealer_footer(hashtags=seo_tags)
+    else:
+        footer = None
+    return add_footer_if_missing(text, footer=footer)
+
+
+def _build_seo_hashtags(v: Dict[str, Any]) -> List[str]:
+    """
+    Génère des hashtags SEO dynamiques orientés vente + Daniel Giroux.
+    """
+    tags = []
+    title = (v.get("title") or "").strip()
+    import re
+
+    # Extraire marque et modèle
+    parts = title.split()
+    if len(parts) >= 2:
+        make = parts[0]
+        model = parts[1]
+        tags.append(f"#{make}")
+        tags.append(f"#{make}{model}")
+
+    # Année
+    m = re.search(r"\b(20[12]\d)\b", title)
+    if m:
+        year = m.group(1)
+        if len(parts) >= 2:
+            tags.append(f"#{parts[0]}{year}")
+
+    # Daniel Giroux — marque personnelle
+    tags.extend([
+        "#DanielGiroux",
+        "#ConseillerExpert",
+        "#KennebecDodge",
+    ])
+
+    # SEO local Beauce (recherches Google)
+    tags.extend([
+        "#Beauce",
+        "#SaintGeorges",
+        "#Québec",
+        "#AutoUsagée",
+        "#AutoÀVendre",
+    ])
+
+    # Tags spécifiques vente par type de véhicule
+    title_lower = title.lower()
+    price_int = v.get("price_int")
+
+    if any(w in title_lower for w in ["1500", "2500", "3500", "ram"]):
+        tags.extend(["#Pickup", "#Truck", "#CamionÀVendre", "#PickupUsagé"])
+    if any(w in title_lower for w in ["wrangler", "gladiator"]):
+        tags.extend(["#Jeep4x4", "#OffRoad", "#JeepÀVendre"])
+    if any(w in title_lower for w in ["grand cherokee", "wagoneer"]):
+        tags.extend(["#SUVLuxe", "#SUVÀVendre"])
+    if any(w in title_lower for w in ["hellcat", "scat pack", "srt"]):
+        tags.extend(["#MuscleCar", "#Performance", "#DodgePerformance"])
+    if any(w in title_lower for w in ["4xe", "hybrid", "phev"]):
+        tags.extend(["#Hybride", "#PHEV", "#ÉcoÉnergie", "#VéhiculeÉlectrique"])
+    if any(w in title_lower for w in ["hornet"]):
+        tags.extend(["#SUVCompact", "#HornetRTPLUS"])
+    if any(w in title_lower for w in ["promaster"]):
+        tags.extend(["#Utilitaire", "#Commercial", "#Fourgon"])
+    if any(w in title_lower for w in ["challenger", "charger"]):
+        tags.extend(["#MuscleCar", "#DodgePerformance"])
+    if any(w in title_lower for w in ["durango"]):
+        tags.extend(["#SUV7Places", "#SUVFamilial"])
+    if any(w in title_lower for w in ["mustang"]):
+        tags.extend(["#FordMustang", "#MuscleCar", "#SportCar"])
+    if any(w in title_lower for w in ["ferrari", "lamborghini", "porsche", "maserati"]):
+        tags.extend(["#Exotique", "#LuxuryCarQuébec", "#SuperCar"])
+
+    # Prix attractif
+    if isinstance(price_int, int):
+        if price_int < 25000:
+            tags.append("#MoinsDe25000")
+        elif price_int < 35000:
+            tags.append("#MoinsDe35000")
+        elif price_int < 50000:
+            tags.append("#MoinsDe50000")
+
+    # Financement
+    tags.append("#FinancementDisponible")
+    tags.append("#ÉchangeAccepté")
+
+    return tags
+
+def _maybe_add_ai_intro(v: Dict[str, Any], body: str, use_humanize: bool = True) -> str:
+    """
+    Ajoute une intro AI au texte ou humanise le texte complet.
+
+    VERSION 2.0:
+    - use_humanize=True: Réécrit l'intro du texte pour la rendre plus naturelle
+    - use_humanize=False: Génère une intro séparée et l'ajoute au-dessus
+    """
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        return body
+
+    # Si humanize_text est disponible et activé, l'utiliser pour rendre le texte plus naturel
+    if use_humanize and humanize_text is not None:
+        try:
+            humanized = humanize_text(body, v)
+            if humanized and humanized != body:
+                stock = (v.get('stock') or '').strip().upper()
+                print(f"[AI HUMANIZE] Texte humanisé pour stock={stock}", flush=True)
+                return humanized
+        except Exception as e:
+            stock = (v.get('stock') or '').strip().upper()
+            print(f"[AI HUMANIZE ERROR] stock={stock} err={e}", flush=True)
+
+    # Fallback: générer une intro séparée
+    if not USE_AI:
+        return body
+
+    if generate_intro_only is None and generate_ad_text is None:
+        return body
+
+    try:
+        from classifier import classify
+
+        kind = (
+            "price_changed"
+            if v.get("old_price") not in (None, "") and v.get("new_price") not in (None, "")
+            else classify(v)
+        )
+
+        # Utiliser generate_intro_only si disponible (plus adapté)
+        if generate_intro_only is not None:
+            intro = generate_intro_only(v, max_chars=250)
+        elif generate_ad_text is not None:
+            intro = generate_ad_text(v, kind, max_chars=250)
+        else:
+            return body
+
+        intro = (intro or "").strip()
+        if not intro:
+            return body
+
+        print(
+            f"[AI INTRO] added for stock={(v.get('stock') or '').strip().upper()} kind={kind}",
+            flush=True,
+        )
+        return (intro + "\n\n" + body).strip()
+
+    except Exception as e:
+        print(f"[AI INTRO ERROR] stock={(v.get('stock') or '').strip().upper()} err={e}", flush=True)
+        return body
+
+def _fmt_price(value: Any) -> str:
+    try:
+        n = int(value)
+        return f"{n:,}".replace(",", " ") + " $"
+    except Exception:
+        return ""
+
+
+def _price_changed_intro_variant2(title: str, old_price: Any, new_price: Any) -> str:
+    old_txt = _fmt_price(old_price)
+    new_txt = _fmt_price(new_price)
+
+    if not old_txt or not new_txt:
+        return ""
+
+    title = (title or "").strip()
+    if not title:
+        return ""
+
+    try:
+        old_n = int(old_price)
+        new_n = int(new_price)
+    except Exception:
+        return ""
+
+    if new_n >= old_n:
+        return ""
+
+    diff = old_n - new_n
+    diff_txt = _fmt_price(diff)
+
+    return (
+        f"📉 RÉDUCTION DE PRIX — {diff_txt} DE RABAIS!\n\n"
+        f"🔥 {title} 🔥\n\n"
+        f"❌ Ancien prix : {old_txt}\n"
+        f"✅ Nouveau prix : {new_txt}\n\n"
+        f"C'est {diff_txt} de moins dans vos poches. "
+        f"Si vous l'aviez à l'œil, c'est le moment ou jamais.\n\n"
+        f"Premier arrivé, premier servi — appelez-moi.\n"
+    )
+
+
+def _humanize_sticker_text(
+    raw_text: str,
+    v: Dict[str, Any],
+    event: str,
+    vin_specs_text: str = "",
+) -> str:
+    """
+    Humanise un texte sticker_to_ad brut via OpenAI.
+    - Ajoute une intro humaine 3-4 phrases
+    - Humanise le titre
+    - Traduit les noms d'options techniques en français lisible
+    - ✅ OPTIONS en MAJUSCULES, ▫️ sous-options en minuscules
+    - Conserve TOUT le footer, lien sticker, hashtags
+    """
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return ""
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+    except Exception:
+        return ""
+
+    title = (v.get("title") or "").strip()
+    stock = (v.get("stock") or "").strip().upper()
+
+    # Construire le contexte véhicule
+    ctx_info = ""
+    if build_vehicle_context is not None:
+        try:
+            ctx = build_vehicle_context(v)
+            parts = []
+            if ctx.get("brand_identity"):
+                parts.append(f"Marque: {ctx['brand_identity']}")
+            if ctx.get("model_known_for"):
+                parts.append(f"Modele: {ctx['model_known_for']}")
+            if ctx.get("vehicle_type"):
+                parts.append(f"Type: {ctx['vehicle_type']}")
+            ctx_info = "\n".join(parts)
+        except Exception:
+            pass
+
+    system_msg = (
+        "Tu es un conseiller expert depuis pres de 20 ans chez Kennebec Dodge Chrysler a Saint-Georges.\n"
+        "Tu es reconnu pour ton expertise, ta passion des vehicules et ton approche humaine.\n"
+        "Tu recois une annonce Facebook generee a partir du Window Sticker d'un vehicule Stellantis.\n\n"
+        "TON TRAVAIL — Humaniser cette annonce en respectant ces regles STRICTES:\n\n"
+        "1. INTRO (3-4 phrases au debut):\n"
+        "   Ecris en tant qu'expert automobile passionne.\n"
+        "   Ton ton: professionnel, passionne, quebecois, authentique.\n"
+        "   Mentionne TON expertise ou TON avis personnel sur le vehicule.\n"
+        "   Pas de cliches, pas de vulgarite. JAMAIS de 'sillonner', 'dominer', 'Beauce', 'routes de la Beauce'.\n"
+        "   ABSOLUMENT AUCUN mot vulgaire, grossier ou a caractere sexuel.\n"
+        "   JAMAIS mentionner 'Daniel Giroux' ou tout nom de vendeur dans l'intro.\n\n"
+        "2. TITRE:\n"
+        "   Remplace SEULEMENT la premiere ligne (titre entre emojis) par un titre plus vendeur.\n\n"
+        "3. PRIX: Le prix doit TOUJOURS apparaitre clairement dans l'annonce.\n\n"
+        "4. OPTIONS — Structure STRICTE:\n"
+        "   ✅ = OPTIONS PRINCIPALES en MAJUSCULES humanisees\n"
+        "   ▫️ = sous-options en minuscules, en retrait\n"
+        "   NE SUPPRIME AUCUNE LIGNE. Chaque ✅ et ▫️ doit rester.\n"
+        "   Traduis les noms techniques en francais lisible.\n\n"
+        "5. NE METS AUCUN LIEN vers kennebecdodge.ca. Pas de 'Fiche complete'.\n"
+        "   Le lien Window Sticker Chrysler est OK s'il est deja present.\n\n"
+        "6. NE DUPLIQUE PAS les sections (echanges, footer, hashtags).\n"
+        "   Le footer professionnel avec la signature sera ajoute automatiquement.\n\n"
+        "NE RAJOUTE RIEN a la fin. Pas de footer, pas de hashtags, pas de coordonnees.\n"
+        "Termine apres la derniere option ou le lien Window Sticker.\n\n"
+        "IMPORTANT: Intègre les informations ci-dessous dans l'annonce de façon professionnelle.\n"
+        "La section 'PROFIL DU VÉHICULE' doit apparaitre avec ce titre exact.\n"
+        "La section 'CARACTÉRISTIQUES CERTIFIÉES' doit apparaitre avec ce titre exact.\n"
+        "NE METS PAS de markdown (###, **, etc.) — c'est du texte Facebook.\n"
+        "NE METS PAS 'NHTSA', 'Window Sticker', 'VIN decode' ou tout terme technique interne."
+    )
+
+    user_prompt = f"Humanise cette annonce:\n\n{raw_text}"
+    if ctx_info:
+        user_prompt += f"\n\nPROFIL DU VÉHICULE:\n{ctx_info}"
+    if vin_specs_text:
+        user_prompt += f"\n\nCARACTÉRISTIQUES CERTIFIÉES:\n{vin_specs_text}"
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.8,
+            max_tokens=2000,
+        )
+        text = response.choices[0].message.content.strip()
+
+        # Couper tout après les hashtags si l'IA a rajouté du texte
+        lines = text.split("\n")
+        output = []
+        for line in lines:
+            output.append(line)
+            if line.strip().startswith("#") and "DanielGiroux" in line:
+                break
+        text = "\n".join(output).strip()
+
+        # Filtre anti-vulgarité
+        vulgar = ["couilles", "balls", "badass", "bitch", "cul ", "merde",
+                  "crisse", "tabarnac", "calisse", "ostie", "fuck", "shit"]
+        for vw in vulgar:
+            if vw in text.lower():
+                text_lines = text.split("\n")
+                text = "\n".join(l for l in text_lines if vw not in l.lower())
+
+        return text.strip()
+
+    except Exception as e:
+        print(f"[HUMANIZE_STICKER ERROR] stock={stock} err={e}", flush=True)
+        return ""
+
+
+
+def _build_ad_text(
+    sb,
+    run_id: str,
+    slug: str,
+    v: Dict[str, Any],
+    event: str,
+    old_price: Any = None,
+    new_price: Any = None,
+) -> str:
+    vin = (v.get("vin") or "").strip().upper()
+    stock = (v.get("stock") or "").strip().upper()
+    title = (v.get("title") or "").strip()
+    url = (v.get("url") or "").strip()
+    price = _vehicle_price_text(v)
+    mileage = _vehicle_mileage_text(v)
+
+    # Si le prix est vide, essayer de le récupérer de l'inventaire DB
+    if not price and stock:
+        try:
+            inv_row = sb.table("inventory").select("price_int").eq("stock", stock).limit(1).execute()
+            if inv_row.data and inv_row.data[0].get("price_int"):
+                p = int(inv_row.data[0]["price_int"])
+                price = f"{p:,}".replace(",", " ") + " $"
+                print(f"[PRICE FALLBACK] stock={stock} price_int={p} from inventory DB", flush=True)
+        except Exception:
+            pass
+
+    # enrichit v pour que l'AI puisse comprendre un PRICE_CHANGED si besoin
+    v_ai = dict(v or {})
+    v_ai["old_price"] = old_price
+    v_ai["new_price"] = new_price
+
+    # ── Décodage VIN via NHTSA (pour tous les véhicules) ──
+    vin_specs_text = ""
+    if decode_vin is not None and len(vin) >= 11:
+        try:
+            vin_specs = decode_vin(vin)
+            if vin_specs and format_specs_for_prompt is not None:
+                vin_specs_text = format_specs_for_prompt(vin_specs)
+                if vin_specs_text:
+                    print(f"[VIN_DECODE OK] slug={slug} vin={vin} specs={len(vin_specs_text)} chars", flush=True)
+        except Exception as e:
+            print(f"[VIN_DECODE FAIL] slug={slug} vin={vin} err={e}", flush=True)
+
+    # ── Récupérer le texte des options sticker pour Stellantis ──
+    sticker_raw_text = ""
+    sticker_options_text = ""
+    is_stellantis = _is_stellantis_vin(vin)
+    is_forced_sticker = _is_stellantis_2018_plus(v)  # 2018+ = FORCER le PDF
+    
+    if USE_STICKER_AD and is_stellantis:
+        # D'abord, essayer de récupérer le sticker déjà en base (base_text du post existant)
+        existing_sticker = ""
+        try:
+            existing_post = sb.table("posts").select("base_text").eq("stock", stock).limit(1).execute()
+            if existing_post.data:
+                bt = (existing_post.data[0].get("base_text") or "")
+                if ("ACCESSOIRES" in bt or "Window Sticker" in bt or "✅" in bt) and len(bt) > 200:
+                    existing_sticker = bt
+        except Exception:
+            pass
+
+        # Récupérer le PDF (cache Supabase ou Chrysler.com)
+        try:
+            res = ensure_sticker_cached(sb, vin, run_id)
+            if (res.get("status") or "").lower() == "ok":
+                # Utiliser les bytes retournés directement (évite double téléchargement)
+                pdf_bytes = res.get("pdf_bytes") or b""
+                if not pdf_bytes:
+                    # Fallback: re-télécharger si les bytes ne sont pas dans la réponse
+                    pdf_bytes = sb.storage.from_(STICKERS_BUCKET).download(res["path"])
+                
+                options = _extract_options_from_sticker_bytes(pdf_bytes)
+                if options:
+                    opt_lines = []
+                    for grp in options:
+                        opt_lines.append(grp.get("title", ""))
+                        for d in grp.get("details", []):
+                            opt_lines.append(f"  - {d}")
+                    sticker_options_text = "\n".join(opt_lines)
+
+                    sticker_raw_text = build_ad_from_options(
+                        title=title,
+                        price=price,
+                        mileage=mileage,
+                        stock=stock,
+                        vin=vin,
+                        options=options,
+                        vehicle_url=url,
+                    )
+                    print(f"[STICKER OK] slug={slug} vin={vin} options={len(options)} groups, text={len(sticker_raw_text)} chars", flush=True)
+                else:
+                    print(f"[STICKER NO OPTIONS] slug={slug} vin={vin} pdf_size={len(pdf_bytes)} - extraction returned 0 groups", flush=True)
+            else:
+                reason = res.get('reason', 'unknown')
+                if is_forced_sticker:
+                    print(f"[STICKER FORCED MISS] slug={slug} vin={vin} year=2018+ status={res.get('status')} reason={reason} — PDF requis mais indisponible!", flush=True)
+                else:
+                    print(f"[STICKER UNAVAIL] slug={slug} vin={vin} status={res.get('status')} reason={reason}", flush=True)
+        except Exception as e:
+            print(f"[STICKER FETCH] slug={slug} vin={vin} err={e}", flush=True)
+
+        # Fallback: utiliser le texte sticker existant en base si le PDF n'a pas marché
+        if not sticker_raw_text and existing_sticker:
+            sticker_raw_text = existing_sticker
+            print(f"[STICKER FALLBACK] Using existing base_text for slug={slug} ({len(existing_sticker)} chars)", flush=True)
+
+    # ══════════════════════════════════════════════════════════════
+    # PRIORITE 1 : Stellantis avec sticker → humanisation IA
+    # ══════════════════════════════════════════════════════════════
+    if USE_AI and sticker_raw_text and generate_smart_text_v3 is not None:
+        try:
+            # NE PAS ajouter de footer avant l'IA (cause de double footer)
+            # L'IA voit le texte brut et produit son propre texte
+            humanized = _humanize_sticker_text(
+                sticker_raw_text, v_ai, event, vin_specs_text
+            )
+            if humanized and len(humanized) >= MIN_POST_TEXT_LEN:
+                # Ajouter le footer APRÈS humanisation si absent
+                humanized = _ensure_contact_footer(humanized, v)
+                print(f"[STICKER+AI OK] slug={slug} stock={stock} chars={len(humanized)}", flush=True)
+                return humanized
+            elif humanized:
+                print(f"[STICKER+AI SHORT] slug={slug} chars={len(humanized)}, fallback raw sticker", flush=True)
+        except Exception as e:
+            print(f"[STICKER+AI FAIL] slug={slug} err={e}, fallback", flush=True)
+
+        # Fallback: sticker brut + ancienne intro AI
+        txt = _maybe_add_ai_intro(v_ai, sticker_raw_text)
+        if event == "PRICE_CHANGED":
+            intro = _price_changed_intro_variant2(title, old_price, new_price)
+            if intro:
+                txt = intro + "\n\n" + txt
+        return _ensure_contact_footer(txt, v)
+
+    # ══════════════════════════════════════════════════════════════
+    # PRIORITE 2 : llm_v3 (génération intelligente avec VIN)
+    # ══════════════════════════════════════════════════════════════
+    if USE_AI and generate_smart_text_v3 is not None:
+        try:
+            # Enrichir le vehicule avec les specs VIN pour le prompt
+            if vin_specs_text:
+                v_ai["_vin_specs_text"] = vin_specs_text
+
+            smart_text = generate_smart_text_v3(
+                vehicle=v_ai,
+                event=event,
+                options_text=sticker_options_text,
+                old_price=old_price,
+                new_price=new_price,
+            )
+            if smart_text and len(smart_text) >= MIN_POST_TEXT_LEN:
+                print(f"[LLM_V3 OK] slug={slug} stock={stock} event={event} chars={len(smart_text)}", flush=True)
+                return _ensure_contact_footer(smart_text, v)
+            elif smart_text:
+                print(f"[LLM_V3 SHORT] slug={slug} chars={len(smart_text)} < min={MIN_POST_TEXT_LEN}, fallback", flush=True)
+        except Exception as e:
+            print(f"[LLM_V3 FAIL] slug={slug} stock={stock} err={e}, fallback", flush=True)
+
+    # ══════════════════════════════════════════════════════════════
+    # PRIORITE 3 : StickerToAd brut (ancien pipeline sans AI)
+    # ══════════════════════════════════════════════════════════════
+    if sticker_raw_text:
+        txt = _maybe_add_ai_intro(v_ai, sticker_raw_text)
+        if event == "PRICE_CHANGED":
+            intro = _price_changed_intro_variant2(title, old_price, new_price)
+            if intro:
+                txt = intro + "\n\n" + txt
+        return _ensure_contact_footer(txt, v)
+
+    # ══════════════════════════════════════════════════════════════
+    # PRIORITE 4 : Fallback text engine externe
+    # ══════════════════════════════════════════════════════════════
+    payload = dict(v or {})
+    payload.update(
+        {
+            "title": title,
+            "stock": stock,
+            "vin": vin,
+            "url": url,
+            "price": price,
+            "mileage": mileage,
+            "old_price": old_price,
+            "new_price": new_price,
+        }
+    )
+
+    if event == "PRICE_CHANGED":
+        payload["sales_angle"] = (
+            "Annonce une baisse de prix avec un ton vendeur humain, énergique et naturel. "
+            "Mentionne clairement l'ancien prix puis le nouveau prix. "
+            "Fais sentir l'opportunité sans être agressif."
+        )
+
+    txt = generate_facebook_text(TEXT_ENGINE_URL, slug, event, payload)
+    txt = (txt or "").strip()
+
+    # AI intro (ancien llm.py) pour enrichir le texte du text engine
+    txt = _maybe_add_ai_intro(v_ai, txt)
+
+    # Hook promo spécial baisse de prix
+    if event == "PRICE_CHANGED":
+        intro = _price_changed_intro_variant2(title, old_price, new_price)
+        if intro:
+            txt = intro + "\n\n" + txt
+
+    return _ensure_contact_footer(txt, v)
+
+
+def rebuild_posts_map(limit: int = 2000, cooldown_days: int = 7) -> Dict[str, Dict[str, Any]]:
+    sb = get_client(SUPABASE_URL, SUPABASE_KEY)
+    cut = datetime.now(timezone.utc) - timedelta(days=cooldown_days)
+
+    rows = (
+        sb.table("posts")
+        .select("stock,post_id,published_at,last_updated_at,status")
+        .eq("status", "ACTIVE")
+        .order("last_updated_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+        or []
+    )
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        stock = (r.get("stock") or "").strip().upper()
+        post_id = (r.get("post_id") or "").strip()
+        published_at = (
+            (r.get("published_at") or "").strip()
+            or (r.get("last_updated_at") or "").strip()
+        )
+
+        if not stock or not post_id or not published_at:
+            continue
+
+        try:
+            dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+
+        if dt < cut:
+            continue
+
+        if stock not in out:
+            out[stock] = {
+                "post_id": post_id,
+                "published_at": published_at,
+            }
+
+    return out
+
+
+# -------------------------
+# MAIN
+# -------------------------
+def main() -> None:
+    sb = get_client(SUPABASE_URL, SUPABASE_KEY)
+
+    run_id = _run_id()
+    now = utc_now_iso()
+
+    inv_db = get_inventory_map(sb)
+    posts_db = get_posts_map(sb)
+
+    page_urls = [
+        f"{BASE_URL}{INVENTORY_PATH}",
+        f"{BASE_URL}{INVENTORY_PATH}?page=2",
+        f"{BASE_URL}{INVENTORY_PATH}?page=3",
+    ]
+
+    detail_urls: List[str] = []
+    for url in page_urls:
+        try:
+            html = fetch_html(SESSION, url, timeout=30)
+            detail_urls += parse_inventory_listing_urls(BASE_URL, INVENTORY_PATH, html)
+        except Exception as e:
+            print(f"[WARN] fetch listing failed url={url} err={e}", flush=True)
+
+    detail_urls = list(dict.fromkeys(detail_urls))
+    if not detail_urls:
+        print("[WARN] No detail urls found. Abort.", flush=True)
+        return
+
+    current: Dict[str, Dict[str, Any]] = {}
+    for u in detail_urls:
+        try:
+            v = parse_vehicle_detail_simple(SESSION, u)
+            stock = (v.get("stock") or "").strip().upper()
+            title = (v.get("title") or "").strip()
+            if not stock or not title:
+                continue
+
+            slug = slugify(title, stock)
+            v["slug"] = slug
+            current[slug] = v
+        except Exception as e:
+            print(f"[WARN] parse vehicle failed url={u} err={e}", flush=True)
+
+    if not current:
+        print("[WARN] No vehicles parsed. Abort.", flush=True)
+        return
+
+    # Enregistrer le run MAINTENANT (avant le pré-cache qui a besoin du run_id en FK)
+    try:
+        from supabase_db import upsert_scrape_run
+        upsert_scrape_run(sb, run_id, status="RUNNING", note=f"inv_count={len(current)}")
+        print(f"[RUN] scrape_run created: {run_id}", flush=True)
+    except Exception as e:
+        print(f"[RUN] scrape_run insert failed: {e} (non-bloquant)", flush=True)
+
+    # =========================================================
+    # PRÉ-CACHE: Forcer le téléchargement des PDFs Stellantis 2018+
+    # =========================================================
+    stellantis_2018_vins = []
+    for slug, v in current.items():
+        if _is_stellantis_2018_plus(v):
+            vin = (v.get("vin") or "").strip().upper()
+            if vin and len(vin) == 17:
+                stellantis_2018_vins.append((slug, vin))
+
+    if stellantis_2018_vins:
+        print(f"[STICKER PRECACHE] {len(stellantis_2018_vins)} véhicules Stellantis 2018+ détectés, vérification des PDFs...", flush=True)
+        cached_ok = 0
+        cached_new = 0
+        cached_fail = 0
+        for slug, vin in stellantis_2018_vins:
+            try:
+                res = ensure_sticker_cached(sb, vin, run_id)
+                status = (res.get("status") or "").lower()
+                source = res.get("source", "")
+                if status == "ok":
+                    if source == "cache_ok":
+                        cached_ok += 1
+                    else:
+                        cached_new += 1
+                        print(f"[STICKER PRECACHE NEW] vin={vin} slug={slug} source={source}", flush=True)
+                else:
+                    cached_fail += 1
+                    print(f"[STICKER PRECACHE FAIL] vin={vin} slug={slug} reason={res.get('reason')}", flush=True)
+            except Exception as e:
+                cached_fail += 1
+                print(f"[STICKER PRECACHE ERROR] vin={vin} slug={slug} err={e}", flush=True)
+        print(
+            f"[STICKER PRECACHE DONE] total={len(stellantis_2018_vins)} "
+            f"cache_hit={cached_ok} new_download={cached_new} fail={cached_fail}",
+            flush=True,
+        )
+
+    new_slugs = [s for s in current if s not in inv_db]
+
+    # =========================================================
+    # INDEX PAR STOCK — Source de vérité pour toutes les comparaisons
+    # Le stock est stable, le slug peut changer si le titre change
+    # =========================================================
+    current_by_stock: Dict[str, Dict[str, Any]] = {}
+    for _slug, _v in current.items():
+        _st = (_v.get("stock") or "").strip().upper()
+        if _st:
+            current_by_stock[_st] = _v
+            current_by_stock[_st]["_slug"] = _slug
+
+    inv_db_by_stock: Dict[str, Dict[str, Any]] = {}
+    for _slug, _v in inv_db.items():
+        _st = (_v.get("stock") or "").strip().upper()
+        if _st:
+            inv_db_by_stock[_st] = _v
+            inv_db_by_stock[_st]["_slug"] = _slug
+
+    posts_db_by_stock: Dict[str, Dict[str, Any]] = {}
+    for _slug, _v in posts_db.items():
+        _st = (_v.get("stock") or "").strip().upper()
+        if _st:
+            posts_db_by_stock[_st] = _v
+            posts_db_by_stock[_st]["_slug"] = _slug
+
+    current_stocks = set(current_by_stock.keys())
+    print(f"[INDEX] Kennebec={len(current_stocks)} stocks, DB inv={len(inv_db_by_stock)}, DB posts={len(posts_db_by_stock)}", flush=True)
+
+    # =========================================================
+    # PRICE_CHANGED — Comparaison par STOCK (pas par slug)
+    # =========================================================
+    price_changed: List[str] = []
+    for stock in (current_stocks & set(inv_db_by_stock.keys())):
+        old = inv_db_by_stock.get(stock) or {}
+        new = current_by_stock.get(stock) or {}
+
+        old_p = old.get("price_int")
+        new_p = new.get("price_int")
+
+        if isinstance(old_p, int) and isinstance(new_p, int):
+            if abs(old_p - new_p) > PRICE_CHANGE_THRESHOLD:
+                # Utiliser le slug du scrape actuel (peut avoir changé)
+                new_slug = new.get("_slug", "")
+                if new_slug:
+                    price_changed.append(new_slug)
+                    print(f"[PRICE_CHANGED DETECT] stock={stock} old={old_p} new={new_p} slug={new_slug}", flush=True)
+
+    # =========================================================
+    # PHOTOS_ADDED — Détection par STOCK (Kennebec vs FB)
+    # =========================================================
+    photos_added: List[str] = []
+    if REFRESH_NO_PHOTO_DAILY:
+        for stock in (current_stocks & set(posts_db_by_stock.keys())):
+            post_data = posts_db_by_stock.get(stock) or {}
+            v = current_by_stock.get(stock) or {}
+            slug = v.get("_slug") or post_data.get("_slug") or ""
+
+            if not slug:
+                continue
+
+            # Photos actuellement disponibles sur le site Kennebec
+            current_photos = v.get("photos") or []
+            nb_kennebec = len(current_photos)
+
+            # Pas de photos sur Kennebec → rien à faire
+            if nb_kennebec == 0:
+                continue
+
+            # Photo count stocké en DB (ce qu'on avait lors de la publication FB)
+            photo_count_db = post_data.get("photo_count", None)
+            has_no_photo_flag = post_data.get("no_photo", None)
+
+            # ── Méthode principale: Comparer photos FB vs Kennebec ──
+            if isinstance(photo_count_db, int) and photo_count_db <= 1 and nb_kennebec > 1:
+                photos_added.append(slug)
+                print(
+                    f"[PHOTOS_ADDED DETECT] stock={stock} slug={slug} "
+                    f"fb_photos={photo_count_db} kennebec_photos={nb_kennebec} "
+                    f"method=FB_VS_KENNEBEC",
+                    flush=True,
+                )
+                continue
+
+            # ── Flag no_photo explicite ──
+            if has_no_photo_flag is True:
+                photos_added.append(slug)
+                print(
+                    f"[PHOTOS_ADDED DETECT] stock={stock} slug={slug} "
+                    f"no_photo_flag=True kennebec_photos={nb_kennebec} "
+                    f"method=NO_PHOTO_FLAG",
+                    flush=True,
+                )
+                continue
+
+            # ── Indices texte dans le base_text ──
+            base_text = (post_data.get("base_text") or "").lower()
+            text_has_no_photo_hint = (
+                "photos suivront" in base_text or
+                "photo non disponible" in base_text or
+                "nouveau véhicule en inventaire" in base_text or
+                "no_photo" in base_text or
+                "sans photo" in base_text or
+                "photo à venir" in base_text or
+                "photos à venir" in base_text
+            )
+            if text_has_no_photo_hint:
+                photos_added.append(slug)
+                print(
+                    f"[PHOTOS_ADDED DETECT] stock={stock} slug={slug} "
+                    f"kennebec_photos={nb_kennebec} "
+                    f"method=TEXT_HINT",
+                    flush=True,
+                )
+                continue
+
+    print(f"[REFRESH_NO_PHOTO] {len(photos_added)} posts à mettre à jour avec photos (limit={REFRESH_NO_PHOTO_LIMIT})", flush=True)
+
+    # =========================================================
+    # VENDU / SOLD — Comparaison réelle Kennebec vs Facebook
+    # Scrape les posts FB, extrait les stocks, compare avec Kennebec
+    # =========================================================
+    # 1. Construire le set de tous les stocks ACTIFS sur Kennebec
+    current_stocks = set()
+    for _slug, _v in current.items():
+        _st = (_v.get("stock") or "").strip().upper()
+        if _st:
+            current_stocks.add(_st)
+
+    print(f"[SOLD CHECK] Kennebec stocks actifs: {len(current_stocks)}", flush=True)
+
+    # 2. Vérifier chaque post en DB: si le stock est encore sur Kennebec → PAS vendu
+    sold_slugs: List[str] = []
+    posts_in_db_not_in_site = set(posts_db.keys()) - set(current.keys())
+    for slug in posts_in_db_not_in_site:
+        post_data = posts_db.get(slug) or {}
+        post_status = (post_data.get("status") or "").upper()
+        post_id = (post_data.get("post_id") or "").strip()
+
+        # Skip si déjà marqué SOLD ou pas de post_id
+        if post_status == "SOLD" or not post_id:
+            continue
+
+        # SÉCURITÉ: Vérifier que le stock n'existe PAS dans le scrape Kennebec
+        post_stock = (post_data.get("stock") or "").strip().upper()
+        if post_stock and post_stock in current_stocks:
+            print(
+                f"[SOLD BLOCKED] slug={slug} stock={post_stock} — "
+                f"stock encore sur Kennebec. PAS marqué VENDU.",
+                flush=True,
+            )
+            continue
+
+        # Skip si le post est très récent (< 3 jours) — possible erreur de scrape
+        published_at = post_data.get("published_at") or ""
+        if published_at:
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                pub = _dt.fromisoformat(published_at.replace("Z", "+00:00"))
+                age_days = (datetime.now(_tz.utc) - pub).days
+                if age_days < 3:
+                    print(
+                        f"[SOLD SKIP RECENT] slug={slug} stock={post_stock} "
+                        f"age={age_days}d < 3d — trop récent pour marquer VENDU",
+                        flush=True,
+                    )
+                    continue
+            except Exception:
+                pass
+
+        sold_slugs.append(slug)
+        print(f"[SOLD CANDIDATE] slug={slug} stock={post_stock} — pas sur Kennebec, sera marqué VENDU", flush=True)
+
+    print(f"[SOLD DETECT] {len(sold_slugs)} posts à marquer VENDU", flush=True)
+
+    # =========================================================
+    # UNSOLD — Corriger les posts marqués VENDU par erreur
+    # Si un post est SOLD en DB mais le stock est encore sur Kennebec → remettre actif
+    # =========================================================
+    unsold_slugs: List[str] = []
+    for stock in current_stocks:
+        post_data = posts_db_by_stock.get(stock)
+        if not post_data:
+            continue
+        post_status = (post_data.get("status") or "").upper()
+        post_id = (post_data.get("post_id") or "").strip()
+        post_slug = post_data.get("_slug") or ""
+
+        if post_status == "SOLD" and post_id and post_slug:
+            unsold_slugs.append(post_slug)
+            print(
+                f"[UNSOLD DETECT] stock={stock} slug={post_slug} — "
+                f"marqué VENDU mais encore sur Kennebec! Sera restauré.",
+                flush=True,
+            )
+
+    if unsold_slugs:
+        print(f"[UNSOLD] {len(unsold_slugs)} posts à restaurer (faux VENDU)", flush=True)
+
+    targets: List[Tuple[str, str]] = (
+        [(s, "UNSOLD") for s in unsold_slugs]  # PRIORITÉ MAX: corriger les faux VENDU
+        + [(s, "PHOTOS_ADDED") for s in photos_added[:REFRESH_NO_PHOTO_LIMIT]]
+        + [(s, "PRICE_CHANGED") for s in price_changed]
+        + [(s, "NEW") for s in new_slugs]
+        + [(s, "SOLD") for s in sold_slugs]
+    )
+
+    if not targets:
+        print(f"OK run_id={run_id} inv_count={len(current)} NEW=0 PRICE_CHANGED=0 PHOTOS_ADDED=0 SOLD=0", flush=True)
+        _run_meta_compare_safe()
+        return
+
+    posts_map = rebuild_posts_map(limit=2000, cooldown_days=POST_COOLDOWN_DAYS)
+
+    posted = 0
+    updated = 0
+    sold_count = 0
+    unsold_count = 0
+    skipped_dup = 0
+    skipped_bad_text = 0
+    skipped_no_photos = 0
+
+    for slug, event in targets[:MAX_TARGETS]:
+        v = current.get(slug) or {}
+        stock = (v.get("stock") or "").strip().upper()
+
+        # =========================================================
+        # UNSOLD — Restaurer un post marqué VENDU par erreur
+        # =========================================================
+        if event == "UNSOLD":
+            old_post = posts_db.get(slug) or {}
+            post_id = (old_post.get("post_id") or "").strip()
+            old_stock = (old_post.get("stock") or "").strip().upper()
+
+            if not post_id:
+                continue
+
+            # Récupérer le base_text original (enlever le préfixe VENDU)
+            base_text = old_post.get("base_text") or ""
+            if "🚨 VENDU 🚨" in base_text:
+                # Enlever le bloc VENDU pour retrouver le texte original
+                parts = base_text.split("────────────────────\n\n", 1)
+                if len(parts) > 1:
+                    base_text = parts[1]
+
+            if not base_text or len(base_text) < 50:
+                # Pas de texte original → régénérer
+                base_text = _build_ad_text(sb, run_id, slug, v, "NEW")
+                if not base_text or len(base_text) < MIN_POST_TEXT_LEN:
+                    print(f"[UNSOLD SKIP] slug={slug} — pas de texte à restaurer", flush=True)
+                    continue
+
+            try:
+                update_post_text(post_id, FB_TOKEN, base_text)
+                upsert_post(sb, {
+                    "slug": slug, "post_id": post_id, "status": "ACTIVE",
+                    "last_updated_at": now, "base_text": base_text, "stock": old_stock,
+                })
+                unsold_count += 1
+                print(f"[UNSOLD] ✅ slug={slug} stock={old_stock} — restauré comme ACTIF", flush=True)
+                log_event(sb, slug, "UNSOLD_RESTORED", {"run_id": run_id, "post_id": post_id, "stock": old_stock})
+                time.sleep(max(1, SLEEP_BETWEEN))
+            except Exception as e:
+                print(f"[ERROR UNSOLD] slug={slug} err={e}", flush=True)
+            continue
+
+        # =========================================================
+        # SOLD — Marquer le post Facebook comme VENDU
+        # =========================================================
+        if event == "SOLD":
+            old_post = posts_db.get(slug) or {}
+            post_id = (old_post.get("post_id") or "").strip()
+            old_stock = (old_post.get("stock") or "").strip().upper()
+
+            if not post_id:
+                continue
+
+            # Construire le message VENDU
+            sold_prefix = (
+                "🚨 VENDU 🚨\n\n"
+                "Ce véhicule n'est plus disponible.\n\n"
+                "👉 Vous recherchez un véhicule semblable ?\n"
+                "Contactez-moi directement, je peux vous aider à en trouver un rapidement.\n\n"
+                "Daniel Giroux\n"
+                "📞 418-222-3939\n"
+                "────────────────────\n\n"
+            )
+
+            # Récupérer le texte original et le préfixer avec VENDU
+            base_text = old_post.get("base_text") or ""
+            # Enlever un ancien préfixe VENDU si déjà présent (éviter doublon)
+            if "🚨 VENDU 🚨" in base_text:
+                base_text = base_text.split("────────────────────\n\n", 1)[-1]
+            sold_message = sold_prefix + base_text
+
+            try:
+                update_post_text(post_id, FB_TOKEN, sold_message)
+
+                upsert_post(
+                    sb,
+                    {
+                        "slug": slug,
+                        "post_id": post_id,
+                        "status": "SOLD",
+                        "sold_at": now,
+                        "last_updated_at": now,
+                        "base_text": sold_message,
+                        "stock": old_stock,
+                    },
+                )
+
+                sold_count += 1
+                print(
+                    f"[SOLD] ✅ slug={slug} stock={old_stock} post_id={post_id}",
+                    flush=True,
+                )
+                log_event(sb, slug, "MARKED_SOLD", {
+                    "run_id": run_id,
+                    "post_id": post_id,
+                    "stock": old_stock,
+                })
+                time.sleep(max(1, SLEEP_BETWEEN))
+
+            except Exception as e:
+                print(f"[ERROR SOLD] slug={slug} err={e}", flush=True)
+                log_event(sb, slug, "SOLD_ERROR", {"err": str(e), "run_id": run_id})
+
+            continue
+
+        if not stock:
+            continue
+
+        if event == "NEW" and stock in posts_map:
+            last_time = posts_map[stock].get("published_at")
+            print(
+                f"[ANTI-DUPLICATE] Skip stock={stock} recent_post={last_time} (cooldown={POST_COOLDOWN_DAYS}d)",
+                flush=True,
+            )
+            skipped_dup += 1
+            continue
+
+        try:
+            if event == "PRICE_CHANGED":
+                old = inv_db.get(slug) or {}
+                msg = _build_ad_text(
+                    sb,
+                    run_id,
+                    slug,
+                    v,
+                    event="PRICE_CHANGED",
+                    old_price=old.get("price_int"),
+                    new_price=v.get("price_int"),
+                ).strip()
+            else:
+                msg = _build_ad_text(
+                    sb,
+                    run_id,
+                    slug,
+                    v,
+                    event="NEW",
+                ).strip()
+
+        except Exception as e:
+            print(f"[TEXT ERROR] slug={slug} event={event} err={e}", flush=True)
+            log_event(sb, slug, "TEXT_ERROR", {"err": str(e), "run_id": run_id, "event": event})
+            continue
+
+        if not msg or len(msg) < MIN_POST_TEXT_LEN:
+            print(f"[SKIP BAD TEXT] slug={slug} event={event} len={len(msg)}", flush=True)
+            log_event(
+                sb,
+                slug,
+                "SKIP_BAD_TEXT",
+                {"event": event, "text_len": len(msg), "min_len": MIN_POST_TEXT_LEN, "run_id": run_id},
+            )
+            skipped_bad_text += 1
+            continue
+
+        if event == "PRICE_CHANGED":
+            old = inv_db.get(slug) or {}
+            old_post = posts_db.get(slug) or {}
+            post_id = (old_post.get("post_id") or "").strip()
+
+            if not post_id:
+                print(f"[PRICE_CHANGED] no post_id for slug={slug}, skip update", flush=True)
+                log_event(sb, slug, "PRICE_CHANGED_SKIP_NO_POST", {"run_id": run_id})
+                continue
+
+            try:
+                update_post_text(post_id, FB_TOKEN, msg)
+
+                upsert_post(
+                    sb,
+                    {
+                        "slug": slug,
+                        "post_id": post_id,
+                        "status": "ACTIVE",
+                        "published_at": old_post.get("published_at") or now,
+                        "last_updated_at": now,
+                        "base_text": msg,
+                        "stock": stock,
+                    },
+                )
+
+                updated += 1
+                print(
+                    f"[UPDATED] PRICE_CHANGED slug={slug} stock={stock} "
+                    f"old_price={old.get('price_int')} new_price={v.get('price_int')} "
+                    f"post_id={post_id}",
+                    flush=True,
+                )
+                time.sleep(max(1, SLEEP_BETWEEN))
+
+            except Exception as e:
+                print(f"[ERROR UPDATE] slug={slug} err={e}", flush=True)
+                log_event(sb, slug, "PRICE_UPDATE_ERROR", {"err": str(e), "run_id": run_id})
+
+            continue
+
+        # =========================================================
+        # FIX #2: PHOTOS_ADDED - Réutiliser msg, publier correctement
+        # =========================================================
+        if event == "PHOTOS_ADDED":
+            old_post = posts_db.get(slug) or {}
+            old_post_id = (old_post.get("post_id") or "").strip()
+
+            # Réutiliser msg déjà généré et validé (plus de double _build_ad_text!)
+            base_text = msg
+
+            if not old_post_id:
+                # Post reseté (post_id vide) — publier comme un NEW
+                print(f"[PHOTOS_ADDED→NEW] no post_id for slug={slug}, publishing as NEW", flush=True)
+                photos = _download_photos(sb, stock, v.get("photos") or [], limit=MAX_PHOTOS)
+                if not photos:
+                    skipped_no_photos += 1
+                    continue
+                try:
+                    media_ids = publish_photos_unpublished(
+                        FB_PAGE_ID, FB_TOKEN, photos[:POST_PHOTOS], limit=POST_PHOTOS,
+                    )
+                    new_post_id = create_post_with_attached_media(FB_PAGE_ID, FB_TOKEN, base_text, media_ids)
+
+                    upsert_post(sb, {
+                        "slug": slug, "post_id": new_post_id, "status": "ACTIVE",
+                        "published_at": now, "last_updated_at": now,
+                        "base_text": base_text, "no_photo": False,
+                        "photo_count": len(photos[:POST_PHOTOS]), "stock": stock,
+                    })
+                    posted += 1
+                    print(f"[NEW from reset] ✅ slug={slug} stock={stock} post_id={new_post_id} photos={len(photos)}", flush=True)
+                    log_event(sb, slug, "NEW_FROM_RESET", {"run_id": run_id, "post_id": new_post_id, "photo_count": len(photos)})
+                    time.sleep(max(1, SLEEP_BETWEEN))
+                except Exception as e:
+                    print(f"[ERROR NEW_RESET] slug={slug} err={e}", flush=True)
+                continue
+
+            photos = _download_photos(sb, stock, v.get("photos") or [], limit=MAX_PHOTOS)
+            if not photos or _is_no_photo_fallback(photos):
+                print(f"[PHOTOS_ADDED] still no real photos for slug={slug}, skip", flush=True)
+                continue
+
+            try:
+                # 1. Supprimer l'ancien post (avec l'image NO PHOTO)
+                deleted = delete_post(old_post_id, FB_TOKEN)
+                if deleted:
+                    print(f"[PHOTOS_ADDED] Deleted old post {old_post_id} for slug={slug}", flush=True)
+                else:
+                    print(f"[PHOTOS_ADDED] Warning: Could not delete old post {old_post_id}, continuing anyway", flush=True)
+
+                # 2. Créer le nouveau post avec les vraies photos (msg déjà prêt)
+                media_ids = publish_photos_unpublished(
+                    FB_PAGE_ID,
+                    FB_TOKEN,
+                    photos[:POST_PHOTOS],
+                    limit=POST_PHOTOS,
+                )
+                new_post_id = create_post_with_attached_media(FB_PAGE_ID, FB_TOKEN, base_text, media_ids)
+
+                # Mettre à jour la DB avec le nouveau post_id
+                upsert_post(
+                    sb,
+                    {
+                        "slug": slug,
+                        "post_id": new_post_id,  # NOUVEAU post_id!
+                        "status": "ACTIVE",
+                        "published_at": now,  # Nouvelle date de publication
+                        "last_updated_at": now,
+                        "base_text": base_text,
+                        "no_photo": False,  # Maintenant il a de vraies photos
+                        "photo_count": len(photos),
+                        "stock": stock,
+                    },
+                )
+
+                updated += 1
+                print(
+                    f"[PHOTOS_ADDED] ✅ slug={slug} stock={stock} "
+                    f"old_post={old_post_id} → new_post={new_post_id} "
+                    f"photos={len(photos)}",
+                    flush=True,
+                )
+                log_event(sb, slug, "PHOTOS_ADDED_SUCCESS", {
+                    "run_id": run_id,
+                    "old_post_id": old_post_id,
+                    "new_post_id": new_post_id,
+                    "photo_count": len(photos),
+                })
+                time.sleep(max(1, SLEEP_BETWEEN))
+
+            except Exception as e:
+                print(f"[ERROR PHOTOS_ADDED] slug={slug} err={e}", flush=True)
+                log_event(sb, slug, "PHOTOS_ADDED_ERROR", {"err": str(e), "run_id": run_id})
+
+            continue
+
+        # =========================================================
+        # NEW POST - Avec FIX #1: Détecter le fallback NO_PHOTO
+        # =========================================================
+        photos = _download_photos(sb, stock, v.get("photos") or [], limit=MAX_PHOTOS)
+        if not photos:
+            print(f"[SKIP NO PHOTOS] slug={slug} stock={stock}", flush=True)
+            log_event(sb, slug, "SKIP_NO_PHOTOS", {"run_id": run_id})
+            skipped_no_photos += 1
+            continue
+
+        # FIX #1: Détecter si on utilise le fallback NO_PHOTO
+        using_no_photo_fallback = _is_no_photo_fallback(photos)
+        if using_no_photo_fallback:
+            print(f"[NO_PHOTO POST] slug={slug} stock={stock} - Post créé avec image placeholder", flush=True)
+
+        try:
+            media_ids = publish_photos_unpublished(
+                FB_PAGE_ID,
+                FB_TOKEN,
+                photos[:POST_PHOTOS],
+                limit=POST_PHOTOS,
+            )
+            post_id = create_post_with_attached_media(FB_PAGE_ID, FB_TOKEN, msg, media_ids)
+
+            # FIX #1: Mettre no_photo=True et photo_count=0 si fallback utilisé
+            upsert_post(
+                sb,
+                {
+                    "slug": slug,
+                    "post_id": post_id,
+                    "status": "ACTIVE",
+                    "published_at": now,
+                    "last_updated_at": now,
+                    "base_text": msg,
+                    "stock": stock,
+                    "no_photo": using_no_photo_fallback,  # FIX: True si fallback, False si vraies photos
+                    "photo_count": 0 if using_no_photo_fallback else len(photos),  # FIX: 0 si fallback
+                },
+            )
+
+            posts_map[stock] = {"post_id": post_id, "published_at": now}
+            posted += 1
+            print(f"[POSTED] NEW slug={slug} stock={stock} post_id={post_id} no_photo={using_no_photo_fallback}", flush=True)
+            time.sleep(max(1, SLEEP_BETWEEN))
+
+        except Exception as e:
+            print(f"[ERROR POST] slug={slug} event={event} err={e}", flush=True)
+            log_event(sb, slug, "POST_ERROR", {"err": str(e), "run_id": run_id})
+            continue
+
+    print(
+        f"OK run_id={run_id} inv_count={len(current)} "
+        f"NEW={len(new_slugs)} PRICE_CHANGED={len(price_changed)} "
+        f"PHOTOS_ADDED={len(photos_added)} SOLD={len(sold_slugs)} UNSOLD={len(unsold_slugs)} "
+        f"posted={posted} updated={updated} sold={sold_count} unsold={unsold_count} "
+        f"skipped_dup={skipped_dup} skipped_bad_text={skipped_bad_text} skipped_no_photos={skipped_no_photos}",
+        flush=True,
+    )
+
+    # =========================================================
+    # CLEANUP: Corriger les posts existants (double footer)
+    # Tourne à chaque cron, corrige max 10 posts par run
+    # =========================================================
+    CLEANUP_LIMIT = 10
+    cleaned = 0
+    try:
+        all_active = sb.table("posts").select("slug,stock,post_id,base_text,status").eq("status", "ACTIVE").execute()
+        for row in (all_active.data or []):
+            if cleaned >= CLEANUP_LIMIT:
+                break
+            post_id = (row.get("post_id") or "").strip()
+            base_text = row.get("base_text") or ""
+            slug = row.get("slug") or ""
+            stock_r = (row.get("stock") or "").strip().upper()
+
+            if not post_id or not base_text:
+                continue
+
+            # Compter les occurrences de "accepte les échanges" (toutes variantes)
+            ll = base_text.lower()
+            echange_count = sum([
+                ll.count("accepte les \u00e9changes"),
+                ll.count("accepte les echanges"),
+            ])
+            if echange_count < 2:
+                continue
+
+            # Nettoyer: garder seulement la première occurrence
+            lines = base_text.split("\n")
+            new_lines = []
+            footer_seen = False
+            skip_mode = False
+            for line in lines:
+                low = line.lower().strip()
+                is_echange = ("accepte les" in low and "change" in low)
+                is_envoi = ("envoie-moi les photos" in low)
+
+                if is_echange:
+                    if not footer_seen:
+                        footer_seen = True
+                        new_lines.append(line)
+                    else:
+                        skip_mode = True
+                    continue
+                if skip_mode and is_envoi:
+                    skip_mode = False
+                    continue
+                skip_mode = False
+                new_lines.append(line)
+
+            cleaned_text = "\n".join(new_lines).strip()
+
+            if cleaned_text != base_text.strip() and len(cleaned_text) > 100:
+                try:
+                    update_post_text(post_id, FB_TOKEN, cleaned_text)
+                    upsert_post(sb, {
+                        "slug": slug, "post_id": post_id, "base_text": cleaned_text,
+                        "last_updated_at": utc_now_iso(), "stock": stock_r,
+                    })
+                    cleaned += 1
+                    print(f"[CLEANUP] slug={slug} stock={stock_r} double footer corrige", flush=True)
+                    time.sleep(max(1, SLEEP_BETWEEN))
+                except Exception as e:
+                    print(f"[CLEANUP ERROR] slug={slug} err={e}", flush=True)
+    except Exception as e:
+        print(f"[CLEANUP] Skipped: {e}", flush=True)
+
+    if cleaned:
+        print(f"[CLEANUP DONE] {cleaned} posts nettoyes", flush=True)
+
+    _run_meta_compare_safe()
+
+if __name__ == "__main__":
+    main()
