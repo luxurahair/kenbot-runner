@@ -21,24 +21,41 @@
 - Wholesale contacts + email sending
 - Auto-repair monitoring system (GitHub Actions)
 
-### 3. kenbot-reprise (App Reprise) - MERGED INTO kenbot-dashboard
-- V2 integree dans kenbot-dashboard
-- Formulaire client standalone: /reprise
-- Admin dashboard avec login, evaluations, filtres, vue detail
-- Gestion des statuts: NOUVEAU, EN EVALUATION, OFFRE ENVOYEE, ACCEPTE, REFUSE
+### 3. Pipeline OpenAI Unifie - V1.0 COMPLETE
+- Module centralise: pipeline/ (client.py, prompts.py, generator.py, cliches.py)
+- ZERO modification a runner_cron_prod.py
+- Backup complet: backup_2026-04-16/
+- Tests: 42/43 (seul Lamborghini Huracan manquant dans vehicle_intelligence.py)
+- Compatibilite arriere: TOUS les imports existants fonctionnent
+
+## Pipeline Architecture
+```
+pipeline/
+├── __init__.py          # Module description
+├── client.py            # Client OpenAI centralise (singleton)
+├── prompts.py           # Prompts/system messages centralises
+├── generator.py         # Fonctions generation unifiees
+└── cliches.py           # Filtre anti-cliches (source unique)
+```
+
+## Events du Cron
+- NEW: Nouveau vehicule
+- PRICE_CHANGED: Baisse de prix
+- PHOTOS_ADDED: Photos ajoutees (remplace NO_PHOTO)
+- SOLD: Vehicule vendu (prefixe VENDU)
+- UNSOLD: Faux vendu corrige (restauration)
 
 ## Completed (2026-04-16)
 - Kit Auto-Repair pour Kenbot: monitoring/auto_repair.py + .github/workflows/auto-repair.yml
 - Health endpoint /api/health ajoute au backend
-- SMTP notifications testees et fonctionnelles (port 587 TLS)
-- Cron GitHub Actions toutes les 5 minutes
-- Auto-rollback et notifications email en cas de panne
+- SMTP notifications testees et fonctionnelles
+- Pipeline OpenAI unifie: pipeline/ module cree
+- Programme de tests complet: tests/test_pipeline_generation.py
+- Backup complet: backup_2026-04-16/ (9 fichiers)
 
 ## Backlog
-- P0: Deployer sur Render (health endpoint + wholesale) via "Save to Github"
-- P0: Ajouter secrets GitHub (SMTP_USER, SMTP_PASS) pour activer les notifications
+- P0: Deployer via "Save to Github" + ajouter secrets GitHub (SMTP_USER, SMTP_PASS)
 - P1: Domaine custom (AchatVehiculeQC.ca ou reprise.danielgiroux.ca)
-- P1: Phase A — Pipeline OpenAI unifie (refactoring llm.py, llm_v3.py, sticker_to_ad.py)
 - P2: Google Business Profile API
 - P2: Collecteur reactions FB
 - P3: Decoupage runner_cron_prod.py en modules
