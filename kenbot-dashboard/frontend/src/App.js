@@ -1843,7 +1843,7 @@ function RepriseTab({ standalone, user }) {
     if (!form.telephone.trim()) missing.push('Telephone');
     if (!form.courriel.trim() || !form.courriel.includes('@')) missing.push('Courriel valide');
     if (!form.km || !form.km.toString().trim()) missing.push('Kilometrage');
-    if (photos.length === 0) missing.push('Au moins 1 photo');
+    if (photos.length < 6) missing.push('Minimum 6 photos (vous en avez ' + photos.length + ')');
     if (missing.length > 0) {
       alert(`Veuillez remplir les champs obligatoires:\n\n- ${missing.join('\n- ')}`);
       return;
@@ -1871,7 +1871,7 @@ function RepriseTab({ standalone, user }) {
     }
   }, [user]);
 
-  const canSubmit = form.prenom && form.nom && form.telephone && form.courriel && form.km && photos.length > 0;
+  const canSubmit = form.prenom && form.nom && form.telephone && form.courriel && form.km && photos.length >= 6;
 
   const rs = { // reprise styles
     card: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1.25rem', marginBottom: '1rem' },
@@ -2036,8 +2036,8 @@ function RepriseTab({ standalone, user }) {
       </div>
 
       {/* 5. PHOTOS */}
-      <div style={rs.card}><div style={rs.cardTitle}>5. Photos de votre vehicule ({photos.length}/10)</div>
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>Prenez des photos des 4 cotes, de l'interieur, du tableau de bord et de tout defaut visible</p>
+      <div style={rs.card}><div style={rs.cardTitle}>5. Photos de votre vehicule ({photos.length}/10 — minimum 6)</div>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>Prenez des photos des 4 cotes, de l'interieur, du tableau de bord et de tout defaut visible (minimum 6 photos)</p>
         <input type="file" accept="image/*" multiple onChange={handlePhotos} style={{ display: 'none' }} id="reprise-photo-input" />
         <label htmlFor="reprise-photo-input" style={{ ...rs.btnSecondary, display: 'block', textAlign: 'center', cursor: 'pointer', padding: '1.5rem' }}>{uploading ? 'Envoi en cours...' : 'Ajouter des photos'}</label>
         {/* Upload progress bars */}
@@ -2084,7 +2084,7 @@ function RepriseTab({ standalone, user }) {
         <button style={{ ...rs.btnPrimary, opacity: canSubmit && !submitting ? 1 : 0.5, padding: '14px 32px', fontSize: '1rem' }} onClick={handleSubmit} disabled={submitting} data-testid="reprise-submit">
           {submitting ? 'Envoi en cours...' : 'Envoyer ma demande'}
         </button>
-        {!canSubmit && <div style={{ fontSize: '0.75rem', color: '#eab308', marginTop: '0.5rem' }}>* Remplissez: nom, telephone, courriel, kilometrage et photos pour envoyer</div>}
+        {!canSubmit && <div style={{ fontSize: '0.75rem', color: '#eab308', marginTop: '0.5rem' }}>* Remplissez: nom, telephone, courriel, kilometrage et minimum 6 photos pour envoyer</div>}
       </div>
     </div>
   );
