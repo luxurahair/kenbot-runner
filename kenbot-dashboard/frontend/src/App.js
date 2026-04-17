@@ -1744,6 +1744,8 @@ function RepriseTab({ standalone, user }) {
   const [uploadProgress, setUploadProgress] = useState({}); // { idx: 0-100 }
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [showValidation, setShowValidation] = useState(false);
+  const [validationErrors, setValidationErrors] = useState([]);
   const [evalId] = useState(() => Math.random().toString(36).slice(2));
   const [form, setForm] = useState({
     prenom: '', nom: '', telephone: '', courriel: '',
@@ -1838,14 +1840,16 @@ function RepriseTab({ standalone, user }) {
   const handleSubmit = async () => {
     // Validation stricte
     const missing = [];
-    if (!form.prenom.trim()) missing.push('Prenom');
-    if (!form.nom.trim()) missing.push('Nom');
-    if (!form.telephone.trim()) missing.push('Telephone');
-    if (!form.courriel.trim() || !form.courriel.includes('@')) missing.push('Courriel valide');
-    if (!form.km || !form.km.toString().trim()) missing.push('Kilometrage');
-    if (photos.length < 6) missing.push('Minimum 6 photos (vous en avez ' + photos.length + ')');
+    if (!form.prenom.trim()) missing.push({ field: 'Prenom', section: 'client' });
+    if (!form.nom.trim()) missing.push({ field: 'Nom', section: 'client' });
+    if (!form.telephone.trim()) missing.push({ field: 'Telephone', section: 'client' });
+    if (!form.courriel.trim() || !form.courriel.includes('@')) missing.push({ field: 'Courriel valide', section: 'client' });
+    if (!form.vin.trim()) missing.push({ field: 'Numero de serie (VIN)', section: 'vehicule' });
+    if (!form.km || !form.km.toString().trim()) missing.push({ field: 'Kilometrage', section: 'vehicule' });
+    if (photos.length < 6) missing.push({ field: `Minimum 6 photos (vous en avez ${photos.length})`, section: 'photos' });
     if (missing.length > 0) {
-      alert(`Veuillez remplir les champs obligatoires:\n\n- ${missing.join('\n- ')}`);
+      setValidationErrors(missing);
+      setShowValidation(true);
       return;
     }
     setSubmitting(true);
@@ -2081,10 +2085,29 @@ function RepriseTab({ standalone, user }) {
 
       {/* SUBMIT */}
       <div style={rs.bottomBar}>
-        <button style={{ ...rs.btnPrimary, opacity: canSubmit && !submitting ? 1 : 0.5, padding: '14px 32px', fontSize: '1rem' }} onClick={handleSubmit} disabled={submitting} data-testid="reprise-submit">
+        <button style={{ ...rs.btnPrimary, opacity: submitting ? 0.5 : 1, padding: '14px 32px', fontSize: '1rem' }} onClick={handleSubmit} disabled={submitting} data-testid="reprise-submit">
           {submitting ? 'Envoi en cours...' : 'Envoyer ma demande'}
         </button>
-        {!canSubmit && <div style={{ fontSize: '0.75rem', color: '#eab308', marginTop: '0.5rem' }}>* Remplissez: nom, telephone, courriel, kilometrage et minimum 6 photos pour envoyer</div>}
+
+        {/* Modal validation — champs manquants */}
+        {showValidation && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 1200, display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(4px)', padding: '1rem' }} onClick={() => setShowValidation(false)}>
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '10px', padding: '1.5rem', width: '100%', maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontFamily: 'Chivo', fontWeight: 700, fontSize: '1rem', color: '#ef4444', marginBottom: '0.75rem' }}>Information manquante</div>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>Veuillez remplir les champs suivants avant d'envoyer votre demande:</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '1rem' }}>
+                {validationErrors.map((err, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', background: '#ef444415', border: '1px solid #ef444430', borderRadius: '6px', cursor: 'pointer' }} onClick={() => { setShowValidation(false); setSec(err.section); }}>
+                    <span style={{ color: '#ef4444', fontWeight: 700, fontSize: '1rem' }}>!</span>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{err.field}</span>
+                    <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: '#0ea5e9' }}>Aller &rarr;</span>
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => setShowValidation(false)} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', background: '#ef4444', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}>Compris</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
