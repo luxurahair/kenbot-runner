@@ -384,6 +384,23 @@ class RunOptions(BaseModel):
     max_targets: int = 4
     force_stock: Optional[str] = None
 
+@api_router.post("/trigger/retry-failed")
+async def trigger_retry_failed():
+    """Remet les posts FAILED a vide pour que le cron les re-tente."""
+    if not sb:
+        return {"ok": False, "message": "DB non connectee"}
+    try:
+        result = sb.table("posts").select("slug,stock").eq("status", "FAILED").execute()
+        failed = result.data or []
+        if not failed:
+            return {"ok": True, "message": "Aucun post en echec", "count": 0}
+        for f in failed:
+            sb.table("posts").delete().eq("slug", f["slug"]).execute()
+        return {"ok": True, "message": f"{len(failed)} posts en echec supprimes — le prochain cron va re-tenter", "count": len(failed)}
+    except Exception as e:
+        return {"ok": False, "message": str(e)}
+
+
 RENDER_API_KEY = os.environ.get("RENDER_DASHBORD_API_KEY", "")
 KENBOT_RUNNER_ID = "crn-d62eg77pm1nc73b6hihg"
 

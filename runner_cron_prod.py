@@ -1597,6 +1597,17 @@ def main() -> None:
                     time.sleep(max(1, SLEEP_BETWEEN))
                 except Exception as e:
                     print(f"[ERROR NEW_RESET] slug={slug} err={e}", flush=True)
+                    # Marquer comme FAILED pour ne pas boucler indefiniment
+                    try:
+                        upsert_post(sb, {
+                            "slug": slug, "post_id": "", "status": "FAILED",
+                            "published_at": now, "last_updated_at": now,
+                            "base_text": base_text, "no_photo": False,
+                            "photo_count": 0, "stock": stock,
+                        })
+                        log_event(sb, slug, "PUBLISH_FAILED", {"run_id": run_id, "error": str(e)[:200]})
+                    except Exception:
+                        pass
                 continue
 
             photos = _download_photos(sb, stock, v.get("photos") or [], limit=MAX_PHOTOS)
@@ -1655,6 +1666,16 @@ def main() -> None:
             except Exception as e:
                 print(f"[ERROR PHOTOS_ADDED] slug={slug} err={e}", flush=True)
                 log_event(sb, slug, "PHOTOS_ADDED_ERROR", {"err": str(e), "run_id": run_id})
+                # Marquer comme FAILED pour ne pas boucler
+                try:
+                    upsert_post(sb, {
+                        "slug": slug, "post_id": "", "status": "FAILED",
+                        "published_at": now, "last_updated_at": now,
+                        "base_text": base_text[:500] if base_text else "", "no_photo": True,
+                        "photo_count": 0, "stock": stock,
+                    })
+                except Exception:
+                    pass
 
             continue
 
@@ -1706,6 +1727,16 @@ def main() -> None:
         except Exception as e:
             print(f"[ERROR POST] slug={slug} event={event} err={e}", flush=True)
             log_event(sb, slug, "POST_ERROR", {"err": str(e), "run_id": run_id})
+            # Marquer comme FAILED pour ne pas boucler
+            try:
+                upsert_post(sb, {
+                    "slug": slug, "post_id": "", "status": "FAILED",
+                    "published_at": now, "last_updated_at": now,
+                    "base_text": msg[:500] if msg else "", "no_photo": True,
+                    "photo_count": 0, "stock": stock,
+                })
+            except Exception:
+                pass
             continue
 
     print(
