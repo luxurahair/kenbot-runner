@@ -384,24 +384,26 @@ class RunOptions(BaseModel):
     max_targets: int = 4
     force_stock: Optional[str] = None
 
+RENDER_API_KEY = os.environ.get("RENDER_DASHBORD_API_KEY", "")
+KENBOT_RUNNER_ID = "crn-d62eg77pm1nc73b6hihg"
+
 @api_router.post("/trigger/run")
 async def trigger_run(options: RunOptions = RunOptions()):
-    if not sb:
-        return {"ok": False, "message": "Supabase non connecte"}
+    import requests as http_req
+    if not RENDER_API_KEY:
+        return {"ok": False, "message": "RENDER_DASHBORD_API_KEY non configure"}
     try:
-        payload = {
-            "dry_run": options.dry_run,
-            "max_targets": options.max_targets,
-            "force_stock": options.force_stock,
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "source": "kenbot-dashboard",
-        }
-        sb.table("events").insert({
-            "slug": "BOOT",
-            "type": "RUN_REQUESTED",
-            "payload": payload,
-        }).execute()
-        return {"ok": True, "message": "Run demande! Le prochain cron va l'executer.", "payload": payload}
+        r = http_req.post(
+            f"https://api.render.com/v1/services/{KENBOT_RUNNER_ID}/jobs",
+            headers={"Authorization": f"Bearer {RENDER_API_KEY}", "Content-Type": "application/json"},
+            json={"startCommand": "python runner_cron_prod.py"},
+            timeout=15,
+        )
+        if r.status_code in (200, 201):
+            data = r.json()
+            return {"ok": True, "message": f"Cron lance! Job ID: {data.get('id','')}", "job": data}
+        else:
+            return {"ok": False, "message": f"Render API erreur: {r.status_code} — {r.text[:200]}"}
     except Exception as e:
         return {"ok": False, "message": str(e)}
 
