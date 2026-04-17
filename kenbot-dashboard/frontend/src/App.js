@@ -386,7 +386,7 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
   const fetchWsContacts = async () => { try { const r = await fetch(`${API}/api/wholesale-contacts`); const d = await r.json(); setWsContacts(d.contacts || []); } catch {} };
   const fetchSettingsUsers = async () => { try { const r = await fetch(`${API}/api/users`); const d = await r.json(); setSettingsUsers(d.users || []); } catch {} };
 
-  useEffect(() => { if (showSettingsModal) { if (canManageWholesale) fetchWsContacts(); if (isAdmin) fetchSettingsUsers(); } }, [showSettingsModal]);
+  useEffect(() => { if (showSettingsModal) { if (canManageWholesale) fetchWsContacts(); if (isAdmin || isDirecteur) fetchSettingsUsers(); } }, [showSettingsModal]);
 
   const handleChangePassword = async () => {
     setPwdMsg('');
@@ -471,7 +471,7 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
 
   const settingsTabs = [{ id: 'compte', label: 'Mon compte' }];
   if (canManageWholesale) settingsTabs.push({ id: 'grossistes', label: 'Grossistes' });
-  if (isAdmin) settingsTabs.push({ id: 'equipe', label: 'Equipe' });
+  if (isAdmin || isDirecteur) settingsTabs.push({ id: 'equipe', label: 'Equipe' });
 
   return (
     <>
@@ -503,7 +503,7 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
                 </div>
                 <button onClick={() => { setShowSettings(false); setShowSettingsModal(true); setSettingsTab('compte'); }} style={{ width: '100%', padding: '0.6rem 1rem', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-primary, #eee)', display: 'flex', alignItems: 'center', gap: '0.5rem' }} onMouseEnter={e => e.target.style.background='var(--bg)'} onMouseLeave={e => e.target.style.background='none'}>Mon compte</button>
                 {canManageWholesale && <button onClick={() => { setShowSettings(false); setShowSettingsModal(true); setSettingsTab('grossistes'); }} style={{ width: '100%', padding: '0.6rem 1rem', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-primary, #eee)', display: 'flex', alignItems: 'center', gap: '0.5rem' }} onMouseEnter={e => e.target.style.background='var(--bg)'} onMouseLeave={e => e.target.style.background='none'}>Grossistes</button>}
-                {isAdmin && <button onClick={() => { setShowSettings(false); setShowSettingsModal(true); setSettingsTab('equipe'); }} style={{ width: '100%', padding: '0.6rem 1rem', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-primary, #eee)', display: 'flex', alignItems: 'center', gap: '0.5rem' }} onMouseEnter={e => e.target.style.background='var(--bg)'} onMouseLeave={e => e.target.style.background='none'}>Equipe</button>}
+                {(isAdmin || isDirecteur) && <button onClick={() => { setShowSettings(false); setShowSettingsModal(true); setSettingsTab('equipe'); }} style={{ width: '100%', padding: '0.6rem 1rem', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-primary, #eee)', display: 'flex', alignItems: 'center', gap: '0.5rem' }} onMouseEnter={e => e.target.style.background='var(--bg)'} onMouseLeave={e => e.target.style.background='none'}>Equipe</button>}
                 <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.25rem' }} />
                 <button onClick={onLogout} style={{ width: '100%', padding: '0.6rem 1rem', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '0.8rem', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '0.5rem' }} onMouseEnter={e => e.target.style.background='var(--bg)'} onMouseLeave={e => e.target.style.background='none'}>Deconnexion</button>
               </div>
@@ -607,8 +607,8 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
               </div>
             )}
 
-            {/* TAB: Equipe (admin seulement) */}
-            {settingsTab === 'equipe' && isAdmin && (
+            {/* TAB: Equipe (admin + directeur) */}
+            {settingsTab === 'equipe' && (isAdmin || isDirecteur) && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {userMsg && <div style={{ fontSize: '0.75rem', color: '#22c55e', fontWeight: 600 }}>{userMsg}</div>}
                 {settingsUsers.map(u => (
