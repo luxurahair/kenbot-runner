@@ -1,0 +1,27 @@
+# =====================================================
+# KENBOT AUTO-DEPLOY - Vercel Deploy Hook on Push
+# =====================================================
+# Declenche automatiquement le deploy hook Vercel
+# a chaque push sur main (contourne le blocage emergent-agent-e1)
+
+name: "\U0001F680 Auto-Deploy Vercel"
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  DEPLOY_HOOKS: https://api.vercel.com/v1/integrations/deploy/prj_FBYVaVmG32m2UMe1pwmlPN2lDAZv/0cBqEJL8UW
+
+jobs:
+  deploy:
+    name: "\U0001F680 Trigger Vercel Deploy"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Deploy Hook
+        run: |
+          echo "Triggering Vercel deploy hook..."
+          RESPONSE=$(curl -s -X POST "$DEPLOY_HOOKS")
+          echo "Response: $RESPONSE"
+          echo "Vercel deploy triggered!"
