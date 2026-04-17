@@ -1173,6 +1173,27 @@ def main() -> None:
     print(f"[INDEX] Kennebec={len(current_stocks)} stocks, DB inv={len(inv_db_by_stock)}, DB posts={len(posts_db_by_stock)}", flush=True)
 
     # =========================================================
+    # META VS SITE — Comparaison EN PREMIER pour detecter les vrais manquants
+    # =========================================================
+    meta_missing_stocks = set()
+    try:
+        _run_meta_compare_safe()
+        # Lire le rapport pour trouver les vehicules manquants sur le site
+        from meta_compare_supabase import load_meta_feed_from_storage
+        meta_rows = load_meta_feed_from_storage(sb)
+        meta_stocks = set()
+        for row in meta_rows:
+            st = (row.get("id") or row.get("stock") or "").strip().upper()
+            if st:
+                meta_stocks.add(st)
+        # Stocks sur Kennebec mais PAS dans le feed Meta/FB
+        meta_missing_stocks = current_stocks - meta_stocks
+        if meta_missing_stocks:
+            print(f"[META VS SITE] {len(meta_missing_stocks)} vehicules sur Kennebec mais PAS sur FB: {list(meta_missing_stocks)[:10]}", flush=True)
+    except Exception as e:
+        print(f"[META VS SITE] Comparaison echouee (non-bloquant): {e}", flush=True)
+
+    # =========================================================
     # PRICE_CHANGED — Comparaison par STOCK (pas par slug)
     # =========================================================
     price_changed: List[str] = []
@@ -1342,6 +1363,19 @@ def main() -> None:
     if unsold_slugs:
         print(f"[UNSOLD] {len(unsold_slugs)} posts à restaurer (faux VENDU)", flush=True)
 
+    # Enrichir new_slugs avec les vehicules detectes comme manquants par meta compare
+    if meta_missing_stocks:
+        for stock in meta_missing_stocks:
+            v = current_by_stock.get(stock)
+            if v:
+                slug = v.get("_slug", "")
+                if slug and slug not in new_slugs:
+                    # Verifier si un post existe deja en DB
+                    existing = posts_db_by_stock.get(stock)
+                    if not existing or (existing.get("status") or "").upper() in ("FAILED", ""):
+                        new_slugs.append(slug)
+                        print(f"[META MISSING → NEW] stock={stock} slug={slug} — ajoute comme NEW (pas sur FB)", flush=True)
+
     targets: List[Tuple[str, str]] = (
         [(s, "UNSOLD") for s in unsold_slugs]  # PRIORITÉ MAX: corriger les faux VENDU
         + [(s, "PHOTOS_ADDED") for s in photos_added[:REFRESH_NO_PHOTO_LIMIT]]
@@ -1352,7 +1386,6 @@ def main() -> None:
 
     if not targets:
         print(f"OK run_id={run_id} inv_count={len(current)} NEW=0 PRICE_CHANGED=0 PHOTOS_ADDED=0 SOLD=0", flush=True)
-        _run_meta_compare_safe()
         return
 
     posts_map = rebuild_posts_map(limit=2000, cooldown_days=POST_COOLDOWN_DAYS)
@@ -1818,8 +1851,6 @@ def main() -> None:
 
     if cleaned:
         print(f"[CLEANUP DONE] {cleaned} posts nettoyes", flush=True)
-
-    _run_meta_compare_safe()
 
 if __name__ == "__main__":
     main()
