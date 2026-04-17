@@ -1276,6 +1276,14 @@ input:focus, select:focus, textarea:focus {
 .eval-ws-send-btn:hover { background: #9333ea; }
 .eval-ws-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* Mobile wholesale button inline sous les photos */
+.eval-ws-mobile-trigger { display: none; margin-top: 6px; padding: 5px 10px; border-radius: 4px; border: 1px solid #a855f740; background: #a855f715; color: #a855f7; font-size: 0.7rem; font-weight: 700; cursor: pointer; width: 100%; text-align: center; }
+.eval-ws-mobile-trigger:hover, .eval-ws-mobile-trigger.active { background: #a855f730; border-color: #a855f7; }
+@media (max-width: 768px) {
+  .eval-ws-mobile-trigger { display: block; }
+  .eval-td-actions .eval-wholesale-btn { display: none !important; }
+}
+
 /* Pagination */
 .eval-pagination { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; margin-top: 0.5rem; border-top: 1px solid var(--border); }
 .eval-page-info { font-size: 0.75rem; color: var(--text-secondary); }

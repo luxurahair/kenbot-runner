@@ -2416,6 +2416,11 @@ function EvaluationsTab({ user }) {
                               </div>
                             )}
                             {/* Wholesale inline menu */}
+                            {(user?.role === 'admin' || user?.role === 'directeur') && (
+                              <button className={`eval-ws-mobile-trigger ${wholesaleInline === ev.id ? 'active' : ''}`} onClick={e => { e.stopPropagation(); toggleWholesaleInline(ev.id); }}>
+                                {wholesaleInline === ev.id ? 'Fermer' : 'Wholesale'}
+                              </button>
+                            )}
                             {(user?.role === 'admin' || user?.role === 'directeur') && wholesaleInline === ev.id && (
                               <div className="eval-ws-inline" onClick={e => e.stopPropagation()}>
                                 <div className="eval-ws-title">Envoyer aux grossistes {replyToEmail && <span className="eval-ws-reply">Retour: {replyToEmail}</span>}</div>
