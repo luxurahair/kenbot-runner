@@ -394,14 +394,13 @@ async def trigger_run(options: RunOptions = RunOptions()):
         return {"ok": False, "message": "RENDER_DASHBORD_API_KEY non configure"}
     try:
         r = http_req.post(
-            f"https://api.render.com/v1/services/{KENBOT_RUNNER_ID}/jobs",
-            headers={"Authorization": f"Bearer {RENDER_API_KEY}", "Content-Type": "application/json"},
-            json={"startCommand": "python runner_cron_prod.py"},
+            f"https://api.render.com/v1/cron-jobs/{KENBOT_RUNNER_ID}/runs",
+            headers={"Authorization": f"Bearer {RENDER_API_KEY}", "accept": "application/json"},
             timeout=15,
         )
         if r.status_code in (200, 201):
             data = r.json()
-            return {"ok": True, "message": f"Cron lance! Job ID: {data.get('id','')}", "job": data}
+            return {"ok": True, "message": f"Cron lance! ID: {data.get('id','')}", "job": data}
         else:
             return {"ok": False, "message": f"Render API erreur: {r.status_code} — {r.text[:200]}"}
     except Exception as e:
