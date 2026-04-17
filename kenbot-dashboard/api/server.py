@@ -1583,25 +1583,54 @@ async def reprise_update_evaluation(eval_id: str, data: dict):
     try:
         sb.table("evaluations").update(update).eq("id", eval_id).execute()
 
-        # Send email notification to conseiller if price was set
-        if prix and notify_email:
+        # Send email notification to created_by (conseiller) when price is set
+        if prix and prix_par:
             result = sb.table("evaluations").select("*").eq("id", eval_id).limit(1).execute()
             ev = result.data[0] if result.data else {}
-            subject = f"Prix de reprise recu — {ev.get('year','')} {ev.get('make','')} {ev.get('model','')}"
+            vehicle_desc = f"{ev.get('year','')} {ev.get('make','')} {ev.get('model','')} {ev.get('trim','')}".strip()
+            subject = f"Prix de reprise recu — {vehicle_desc}"
             body = f"""
-            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-              <h2 style="color:#0ea5e9">Prix de reprise recu</h2>
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:1.5rem">
+              <h2 style="color:#0ea5e9;margin:0 0 0.5rem">Prix de reprise recu</h2>
               <p>Le directeur <strong>{prix_par}</strong> a evalue le vehicule:</p>
-              <table style="width:100%;border-collapse:collapse;margin:1rem 0">
-                <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666">Vehicule</td><td style="padding:8px;border-bottom:1px solid #eee;font-weight:bold">{ev.get('year','')} {ev.get('make','')} {ev.get('model','')} {ev.get('trim','')}</td></tr>
-                <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666">VIN</td><td style="padding:8px;border-bottom:1px solid #eee;font-family:monospace">{ev.get('vin','')}</td></tr>
-                <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666">Client</td><td style="padding:8px;border-bottom:1px solid #eee">{ev.get('client_name','')}</td></tr>
-                <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666">KM</td><td style="padding:8px;border-bottom:1px solid #eee">{ev.get('km','')} km</td></tr>
-                <tr style="background:#f0f9ff"><td style="padding:12px;color:#0ea5e9;font-weight:bold">PRIX DE REPRISE</td><td style="padding:12px;font-size:1.3em;font-weight:bold;color:#0ea5e9">{prix} $</td></tr>
-              </table>
-              <p style="color:#666;font-size:0.85em">Kennebec Dodge Chrysler — 418-222-3939</p>
+              <div style="background:#f0f9ff;border:2px solid #0ea5e9;border-radius:8px;padding:1rem;margin:1rem 0">
+                <table style="width:100%;border-collapse:collapse">
+                  <tr><td style="padding:6px 0;color:#6b7280;width:110px">Vehicule</td><td style="padding:6px 0;font-weight:600">{vehicle_desc}</td></tr>
+                  <tr><td style="padding:6px 0;color:#6b7280">VIN</td><td style="padding:6px 0;font-family:monospace">{ev.get('vin','')}</td></tr>
+                  <tr><td style="padding:6px 0;color:#6b7280">Client</td><td style="padding:6px 0">{ev.get('client_name','')}</td></tr>
+                  <tr><td style="padding:6px 0;color:#6b7280">Telephone</td><td style="padding:6px 0">{ev.get('client_phone','')}</td></tr>
+                  <tr><td style="padding:6px 0;color:#6b7280">KM</td><td style="padding:6px 0">{ev.get('km','')} km</td></tr>
+                </table>
+                <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:2px solid #0ea5e9;text-align:center">
+                  <div style="font-size:0.75rem;color:#0ea5e9;font-weight:700;text-transform:uppercase">Prix de reprise</div>
+                  <div style="font-size:2rem;font-weight:700;color:#0ea5e9">{prix:,} $</div>
+                </div>
+              </div>
+              <p>Veuillez consulter vos evaluations dans le dashboard pour les details.</p>
+              <a href="https://kenbot-dashboard-five.vercel.app" style="display:inline-block;padding:10px 20px;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Ouvrir le dashboard</a>
+              <p style="color:#6b7280;font-size:0.85em;margin-top:1.5rem">Kennebec Dodge Chrysler — 418-222-3939</p>
             </div>"""
-            send_email(notify_email, subject, body)
+
+            # Envoyer au conseiller qui a cree l'evaluation (created_by)
+            created_by = ev.get("created_by", "")
+            recipients_sent = set()
+            if created_by and created_by != "client":
+                user_result = sb.table("dashboard_users").select("email,name").eq("username", created_by).limit(1).execute()
+                if user_result.data and user_result.data[0].get("email"):
+                    send_email(user_result.data[0]["email"], subject, body)
+                    recipients_sent.add(user_result.data[0]["email"])
+                    logging.info(f"Prix notification envoyee a {created_by} ({user_result.data[0]['email']})")
+
+            # Aussi envoyer au notify_email si specifie et pas deja envoye
+            if notify_email and notify_email not in recipients_sent:
+                send_email(notify_email, subject, body)
+
+            # Aussi envoyer a l'admin
+            admin_result = sb.table("dashboard_users").select("email").eq("role", "admin").execute()
+            for a in (admin_result.data or []):
+                if a.get("email") and a["email"] not in recipients_sent:
+                    send_email(a["email"], subject, body)
+                    recipients_sent.add(a["email"])
 
         return {"success": True}
     except Exception as e:

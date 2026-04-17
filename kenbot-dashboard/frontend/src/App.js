@@ -1836,11 +1836,22 @@ function RepriseTab({ standalone, user }) {
   };
 
   const handleSubmit = async () => {
-    if (!form.prenom || !form.nom || !form.telephone) return;
+    // Validation stricte
+    const missing = [];
+    if (!form.prenom.trim()) missing.push('Prenom');
+    if (!form.nom.trim()) missing.push('Nom');
+    if (!form.telephone.trim()) missing.push('Telephone');
+    if (!form.courriel.trim() || !form.courriel.includes('@')) missing.push('Courriel valide');
+    if (!form.km || !form.km.toString().trim()) missing.push('Kilometrage');
+    if (photos.length === 0) missing.push('Au moins 1 photo');
+    if (missing.length > 0) {
+      alert(`Veuillez remplir les champs obligatoires:\n\n- ${missing.join('\n- ')}`);
+      return;
+    }
     setSubmitting(true);
     try {
       const payload = { ...form, vin: form.vin.trim().toUpperCase(), photos: photos.map(p => p.url),
-        km: form.km ? parseInt(form.km.replace(/\D/g, '')) : null,
+        km: form.km ? parseInt(form.km.toString().replace(/\D/g, '')) : null,
         paiement_restant: form.solde_montant ? parseFloat(form.solde_montant.replace(/\D/g, '')) : null,
         etat_general: ETATS_GENERAL.find(e => e.value === form.etat_general)?.label || '',
         created_by: user?.username || 'client',
@@ -1851,7 +1862,16 @@ function RepriseTab({ standalone, user }) {
     setSubmitting(false);
   };
 
-  const canSubmit = form.prenom && form.nom && form.telephone;
+  // Pre-remplir avec le user logue (conseiller/directeur/admin)
+  useEffect(() => {
+    if (user?.name && !standalone) {
+      const parts = (user.name || '').split(' ');
+      if (!form.prenom && parts[0]) up('prenom', parts[0]);
+      if (!form.nom && parts.slice(1).join(' ')) up('nom', parts.slice(1).join(' '));
+    }
+  }, [user]);
+
+  const canSubmit = form.prenom && form.nom && form.telephone && form.courriel && form.km && photos.length > 0;
 
   const rs = { // reprise styles
     card: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1.25rem', marginBottom: '1rem' },
@@ -2061,9 +2081,10 @@ function RepriseTab({ standalone, user }) {
 
       {/* SUBMIT */}
       <div style={rs.bottomBar}>
-        <button style={{ ...rs.btnPrimary, opacity: canSubmit && !submitting ? 1 : 0.5, padding: '14px 32px', fontSize: '1rem' }} onClick={handleSubmit} disabled={!canSubmit || submitting} data-testid="reprise-submit">
+        <button style={{ ...rs.btnPrimary, opacity: canSubmit && !submitting ? 1 : 0.5, padding: '14px 32px', fontSize: '1rem' }} onClick={handleSubmit} disabled={submitting} data-testid="reprise-submit">
           {submitting ? 'Envoi en cours...' : 'Envoyer ma demande'}
         </button>
+        {!canSubmit && <div style={{ fontSize: '0.75rem', color: '#eab308', marginTop: '0.5rem' }}>* Remplissez: nom, telephone, courriel, kilometrage et photos pour envoyer</div>}
       </div>
     </div>
   );
