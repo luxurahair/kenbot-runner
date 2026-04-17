@@ -1747,8 +1747,9 @@ function RepriseTab({ standalone, user }) {
   const [showValidation, setShowValidation] = useState(false);
   const [validationErrors, setValidationErrors] = useState([]);
   const [evalId] = useState(() => Math.random().toString(36).slice(2));
+  const [staffList, setStaffList] = useState([]);
   const [form, setForm] = useState({
-    prenom: '', nom: '', telephone: '', courriel: '',
+    prenom: '', nom: '', telephone: '', courriel: '', conseiller: '',
     type_transaction: '', solde_du: false, solde_montant: '', institution: '', versement: '', frequence_versement: '', interet: '', provenance: '', notes_client: '',
     vin: '', km: '', couleur_ext: '', couleur_int: '', nombre_cles: '1',
     options: [], etat_general: 3, etat_parebrise: 'Bon etat', etat_mecanique: '', dommages: [],
@@ -1858,7 +1859,8 @@ function RepriseTab({ standalone, user }) {
         km: form.km ? parseInt(form.km.toString().replace(/\D/g, '')) : null,
         paiement_restant: form.solde_montant ? parseFloat(form.solde_montant.replace(/\D/g, '')) : null,
         etat_general: ETATS_GENERAL.find(e => e.value === form.etat_general)?.label || '',
-        created_by: user?.username || 'client',
+        created_by: user?.username || form.conseiller || 'client',
+        assigned_to: form.conseiller || user?.username || '',
       };
       const r = await fetch(`${API}/api/evaluations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (r.ok) setSubmitted(true);
@@ -1872,8 +1874,14 @@ function RepriseTab({ standalone, user }) {
       const parts = (user.name || '').split(' ');
       if (!form.prenom && parts[0]) up('prenom', parts[0]);
       if (!form.nom && parts.slice(1).join(' ')) up('nom', parts.slice(1).join(' '));
+      up('conseiller', user.username);
     }
   }, [user]);
+
+  // Charger la liste des conseillers/directeurs/admin
+  useEffect(() => {
+    fetch(`${API}/api/users`).then(r => r.json()).then(d => setStaffList(d.users || [])).catch(() => {});
+  }, []);
 
   const canSubmit = form.prenom && form.nom && form.telephone && form.courriel && form.km && photos.length >= 6;
 
@@ -1922,6 +1930,18 @@ function RepriseTab({ standalone, user }) {
         </div>
       )}
       {/* ALL SECTIONS SCROLLABLE */}
+
+      {/* CONSEILLER */}
+      <div style={rs.card}>
+        <div style={rs.cardTitle}>Qui est votre conseiller?</div>
+        <select style={{ ...rs.input, fontSize: '0.95rem' }} value={form.conseiller} onChange={e => up('conseiller', e.target.value)} data-testid="reprise-conseiller">
+          <option value="">— Selectionnez votre conseiller —</option>
+          {staffList.map(s => (
+            <option key={s.username} value={s.username}>{s.name} ({s.role === 'admin' ? 'Directeur general' : s.role === 'directeur' ? 'Directeur des ventes' : 'Conseiller'})</option>
+          ))}
+          <option value="aucun">Je n'ai pas de conseiller</option>
+        </select>
+      </div>
 
       {/* 1. CLIENT */}
       <div style={rs.card}><div style={rs.cardTitle}>1. Vos coordonnees</div>
