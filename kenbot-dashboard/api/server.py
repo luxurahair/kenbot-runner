@@ -1458,6 +1458,42 @@ async def reprise_create_evaluation(data: dict):
     }
     try:
         sb.table("evaluations").insert(evaluation).execute()
+
+        # Email notification au directeur et admin
+        try:
+            users_result = sb.table("dashboard_users").select("email,role,name").in_("role", ["admin", "directeur"]).execute()
+            recipients = [u for u in (users_result.data or []) if u.get("email")]
+            if recipients:
+                vehicle_desc = f"{evaluation.get('year','')} {evaluation.get('make','')} {evaluation.get('model','')} {evaluation.get('trim','')}".strip() or "Vehicule non decode"
+                photos_html = ""
+                for p in (evaluation.get("photos") or [])[:4]:
+                    photos_html += f'<img src="{p}" style="width:100px;height:80px;object-fit:cover;border-radius:4px;margin:2px" />'
+                notif_html = f"""
+                <div style="font-family:Arial,sans-serif;max-width:550px;margin:0 auto;padding:1.5rem">
+                  <h2 style="color:#0284c7;margin:0 0 0.5rem">Nouvelle demande de reprise</h2>
+                  <div style="background:#f0f9ff;border:2px solid #0284c7;border-radius:8px;padding:1rem;margin:0.5rem 0">
+                    <table style="width:100%;border-collapse:collapse">
+                      <tr><td style="padding:4px 0;color:#6b7280;width:110px">Client</td><td style="padding:4px 0;font-weight:600">{evaluation.get('client_name','')}</td></tr>
+                      <tr><td style="padding:4px 0;color:#6b7280">Telephone</td><td style="padding:4px 0">{evaluation.get('client_phone','')}</td></tr>
+                      <tr><td style="padding:4px 0;color:#6b7280">Courriel</td><td style="padding:4px 0">{evaluation.get('client_email','')}</td></tr>
+                      <tr><td style="padding:4px 0;color:#6b7280">Vehicule</td><td style="padding:4px 0;font-weight:600">{vehicle_desc}</td></tr>
+                      <tr><td style="padding:4px 0;color:#6b7280">VIN</td><td style="padding:4px 0;font-family:monospace">{evaluation.get('vin','')}</td></tr>
+                      <tr><td style="padding:4px 0;color:#6b7280">Kilometrage</td><td style="padding:4px 0">{evaluation.get('km','') or 'N/A'} km</td></tr>
+                      <tr><td style="padding:4px 0;color:#6b7280">Etat</td><td style="padding:4px 0">{evaluation.get('etat_general','')}/5</td></tr>
+                    </table>
+                  </div>
+                  {f'<div style="margin:0.5rem 0">{photos_html}</div>' if photos_html else ''}
+                  <div style="margin-top:1rem">
+                    <a href="https://kenbot-dashboard-five.vercel.app" style="display:inline-block;padding:10px 20px;background:#0284c7;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Voir dans le dashboard</a>
+                  </div>
+                  <p style="color:#6b7280;font-size:0.85em;margin-top:1rem">Kennebec Dodge Chrysler — 418-222-3939</p>
+                </div>"""
+                for r in recipients:
+                    send_email(r["email"], f"Nouvelle reprise: {vehicle_desc} — {evaluation.get('client_name','')}", notif_html)
+                logging.info(f"Notification envoyee a {len(recipients)} destinataire(s)")
+        except Exception as notif_err:
+            logging.error(f"Notification email error: {notif_err}")
+
         return {"success": True, "id": evaluation["id"]}
     except Exception as e:
         logging.error(f"Insert evaluation error: {e}")
