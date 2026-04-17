@@ -352,7 +352,10 @@ function Dashboard({ user, allowedTabs, onLogout }) {
 
 function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
   const [showRunPanel, setShowRunPanel] = useState(false);
-  const [showPwdModal, setShowPwdModal] = useState(false);
+  const [showSettings, setShowSettings] = useState(false); // avatar dropdown
+  const [showSettingsModal, setShowSettingsModal] = useState(false); // full settings panel
+  const [settingsTab, setSettingsTab] = useState('compte');
+  // Password
   const [pwdOld, setPwdOld] = useState('');
   const [pwdNew, setPwdNew] = useState('');
   const [pwdConfirm, setPwdConfirm] = useState('');
@@ -360,6 +363,30 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
   const [pwdLoading, setPwdLoading] = useState(false);
   const [showOld, setShowOld] = useState(false);
   const [showNew, setShowNew] = useState(false);
+  // Email
+  const [newEmail, setNewEmail] = useState('');
+  const [emailMsg, setEmailMsg] = useState('');
+  const [emailLoading, setEmailLoading] = useState(false);
+  // Wholesale contacts (directeur+admin)
+  const [wsContacts, setWsContacts] = useState([]);
+  const [wsNew, setWsNew] = useState({ prenom: '', nom: '', entreprise: '', telephone: '', email: '' });
+  const [wsEdit, setWsEdit] = useState(null);
+  const [wsMsg, setWsMsg] = useState('');
+  const [wsLoading, setWsLoading] = useState(false);
+  // Users (admin)
+  const [settingsUsers, setSettingsUsers] = useState([]);
+  const [userEdit, setUserEdit] = useState(null);
+  const [userMsg, setUserMsg] = useState('');
+
+  const isAdmin = user?.role === 'admin';
+  const isDirecteur = user?.role === 'directeur';
+  const canManageWholesale = isAdmin || isDirecteur;
+  const ROLE_LABELS = { admin: 'Administrateur', directeur: 'Directeur des ventes', conseiller: 'Conseiller' };
+
+  const fetchWsContacts = async () => { try { const r = await fetch(`${API}/api/wholesale-contacts`); const d = await r.json(); setWsContacts(d.contacts || []); } catch {} };
+  const fetchSettingsUsers = async () => { try { const r = await fetch(`${API}/api/users`); const d = await r.json(); setSettingsUsers(d.users || []); } catch {} };
+
+  useEffect(() => { if (showSettingsModal) { if (canManageWholesale) fetchWsContacts(); if (isAdmin) fetchSettingsUsers(); } }, [showSettingsModal]);
 
   const handleChangePassword = async () => {
     setPwdMsg('');
@@ -369,11 +396,61 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
     setPwdLoading(true);
     try {
       const r = await fetch(`${API}/api/users/change-password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: user?.username, old_password: pwdOld, new_password: pwdNew }) });
-      if (r.ok) { setPwdMsg('Mot de passe change avec succes!'); setPwdOld(''); setPwdNew(''); setPwdConfirm(''); setTimeout(() => setShowPwdModal(false), 1500); }
+      if (r.ok) { setPwdMsg('Mot de passe change!'); setPwdOld(''); setPwdNew(''); setPwdConfirm(''); }
       else { const d = await r.json(); setPwdMsg(d.detail || 'Erreur'); }
     } catch (e) { setPwdMsg('Erreur reseau'); }
     setPwdLoading(false);
   };
+
+  const handleChangeEmail = async () => {
+    setEmailMsg('');
+    if (!newEmail.includes('@')) { setEmailMsg('Courriel invalide'); return; }
+    setEmailLoading(true);
+    try {
+      const r = await fetch(`${API}/api/users/${user?.username}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: newEmail }) });
+      if (r.ok) { setEmailMsg('Courriel mis a jour!'); }
+      else { setEmailMsg('Erreur'); }
+    } catch { setEmailMsg('Erreur reseau'); }
+    setEmailLoading(false);
+  };
+
+  const handleAddWholesale = async () => {
+    if (!wsNew.email || !wsNew.nom) { setWsMsg('Nom et email requis'); return; }
+    setWsLoading(true);
+    try {
+      const r = await fetch(`${API}/api/wholesale-contacts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `${wsNew.prenom} ${wsNew.nom}`.trim(), company: wsNew.entreprise, phone: wsNew.telephone, email: wsNew.email }) });
+      if (r.ok) { setWsNew({ prenom: '', nom: '', entreprise: '', telephone: '', email: '' }); setWsMsg('Grossiste ajoute!'); fetchWsContacts(); }
+      else { setWsMsg('Erreur'); }
+    } catch { setWsMsg('Erreur reseau'); }
+    setWsLoading(false);
+  };
+
+  const handleEditWholesale = async () => {
+    if (!wsEdit) return;
+    setWsLoading(true);
+    try {
+      const r = await fetch(`${API}/api/wholesale-contacts/${wsEdit.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: wsEdit.name, company: wsEdit.company, phone: wsEdit.phone, email: wsEdit.email, active: wsEdit.active }) });
+      if (r.ok) { setWsEdit(null); setWsMsg('Modifie!'); fetchWsContacts(); }
+      else { setWsMsg('Erreur'); }
+    } catch { setWsMsg('Erreur reseau'); }
+    setWsLoading(false);
+  };
+
+  const handleEditUser = async (u, changes) => {
+    try {
+      const body = {};
+      if (changes.name) body.name = changes.name;
+      if (changes.email) body.email = changes.email;
+      if (changes.phone) body.phone = changes.phone;
+      if (changes.role) body.role = changes.role;
+      if (changes.password) body.password = changes.password;
+      const r = await fetch(`${API}/api/users/${u.username}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (r.ok) { setUserMsg('Modifie!'); fetchSettingsUsers(); setUserEdit(null); }
+      else { setUserMsg('Erreur'); }
+    } catch { setUserMsg('Erreur reseau'); }
+  };
+
+  const ms = { input: { width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.8rem', background: 'var(--bg)', fontFamily: 'IBM Plex Sans' }, label: { fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '2px', display: 'block' }, row: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' } };
 
   const allTabs = [
     { id: 'cockpit', label: 'Cockpit' },
@@ -391,6 +468,11 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
   ];
   const tabs = allTabs.filter(t => allowedTabs.includes(t.id));
   const connected = status?.supabase_connected;
+
+  const settingsTabs = [{ id: 'compte', label: 'Mon compte' }];
+  if (canManageWholesale) settingsTabs.push({ id: 'grossistes', label: 'Grossistes' });
+  if (isAdmin) settingsTabs.push({ id: 'equipe', label: 'Equipe' });
+
   return (
     <>
       <header className="header" data-testid="header">
@@ -407,43 +489,159 @@ function Header({ tab, setTab, status, allowedTabs, user, onLogout }) {
         </nav>
         <div className="header-right">
           {user?.role === 'admin' && (
-            <button className="run-btn" onClick={() => setShowRunPanel(!showRunPanel)} data-testid="run-cron-btn">
-              RUN CRON
-            </button>
+            <button className="run-btn" onClick={() => setShowRunPanel(!showRunPanel)} data-testid="run-cron-btn">RUN CRON</button>
           )}
           <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontFamily: 'IBM Plex Mono' }} data-testid="user-name">{user?.name}</span>
-          <button onClick={() => setShowPwdModal(true)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', padding: '4px 10px', fontSize: '0.65rem', color: 'var(--accent-blue)', cursor: 'pointer', fontFamily: 'IBM Plex Sans' }} data-testid="change-pwd-btn">
-            Mot de passe
-          </button>
-          <button onClick={onLogout} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', padding: '4px 10px', fontSize: '0.7rem', color: 'var(--text-secondary)', cursor: 'pointer', fontFamily: 'IBM Plex Sans' }} data-testid="logout-btn">
-            Deconnexion
-          </button>
-          <span className="version-tag" data-testid="version-tag">v{status?.version || '2.1.0'}</span>
+          <div style={{ position: 'relative' }}>
+            <button onClick={() => setShowSettings(s => !s)} style={{ width: 32, height: 32, borderRadius: '50%', border: '2px solid #0ea5e9', background: '#0ea5e920', color: '#0ea5e9', fontWeight: 700, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Chivo' }} data-testid="avatar-btn">{(user?.name || 'U').charAt(0).toUpperCase()}</button>
+            {showSettings && <>
+              <div style={{ position: 'fixed', inset: 0, zIndex: 1199 }} onClick={() => setShowSettings(false)} />
+              <div style={{ position: 'absolute', right: 0, top: 40, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.5rem 0', minWidth: '220px', zIndex: 1200, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }} data-testid="avatar-dropdown">
+                <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>{user?.name}</div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{user?.username} | {ROLE_LABELS[user?.role] || user?.role}</div>
+                </div>
+                <button onClick={() => { setShowSettings(false); setShowSettingsModal(true); setSettingsTab('compte'); }} style={{ width: '100%', padding: '0.6rem 1rem', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-primary, #eee)', display: 'flex', alignItems: 'center', gap: '0.5rem' }} onMouseEnter={e => e.target.style.background='var(--bg)'} onMouseLeave={e => e.target.style.background='none'}>Mon compte</button>
+                {canManageWholesale && <button onClick={() => { setShowSettings(false); setShowSettingsModal(true); setSettingsTab('grossistes'); }} style={{ width: '100%', padding: '0.6rem 1rem', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-primary, #eee)', display: 'flex', alignItems: 'center', gap: '0.5rem' }} onMouseEnter={e => e.target.style.background='var(--bg)'} onMouseLeave={e => e.target.style.background='none'}>Grossistes</button>}
+                {isAdmin && <button onClick={() => { setShowSettings(false); setShowSettingsModal(true); setSettingsTab('equipe'); }} style={{ width: '100%', padding: '0.6rem 1rem', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-primary, #eee)', display: 'flex', alignItems: 'center', gap: '0.5rem' }} onMouseEnter={e => e.target.style.background='var(--bg)'} onMouseLeave={e => e.target.style.background='none'}>Equipe</button>}
+                <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.25rem' }} />
+                <button onClick={onLogout} style={{ width: '100%', padding: '0.6rem 1rem', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '0.8rem', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '0.5rem' }} onMouseEnter={e => e.target.style.background='var(--bg)'} onMouseLeave={e => e.target.style.background='none'}>Deconnexion</button>
+              </div>
+            </>}
+          </div>
+          <span className="version-tag" data-testid="version-tag">v{status?.version || '2.2.0'}</span>
         </div>
       </header>
       {showRunPanel && <RunPanel onClose={() => setShowRunPanel(false)} />}
-      {showPwdModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1100, display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(4px)' }} onClick={() => setShowPwdModal(false)}>
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '10px', padding: '1.5rem', width: '100%', maxWidth: '380px' }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontFamily: 'Chivo', fontWeight: 700, fontSize: '1rem', marginBottom: '1rem' }}>Changer le mot de passe</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <div style={{ position: 'relative' }}>
-                <input type={showOld ? 'text' : 'password'} placeholder="Mot de passe actuel" value={pwdOld} onChange={e => setPwdOld(e.target.value)} style={{ width: '100%', padding: '10px 42px 10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
-                <button type="button" onClick={() => setShowOld(!showOld)} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{showOld ? 'Cacher' : 'Voir'}</button>
-              </div>
-              <div style={{ position: 'relative' }}>
-                <input type={showNew ? 'text' : 'password'} placeholder="Nouveau mot de passe" value={pwdNew} onChange={e => setPwdNew(e.target.value)} style={{ width: '100%', padding: '10px 42px 10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
-                <button type="button" onClick={() => setShowNew(!showNew)} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{showNew ? 'Cacher' : 'Voir'}</button>
-              </div>
-              <div style={{ position: 'relative' }}>
-                <input type={showNew ? 'text' : 'password'} placeholder="Confirmer le nouveau" value={pwdConfirm} onChange={e => setPwdConfirm(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleChangePassword()} style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.85rem', background: 'var(--bg)' }} />
-              </div>
-              {pwdMsg && <div style={{ fontSize: '0.8rem', color: pwdMsg.includes('succes') ? '#22c55e' : '#ef4444', fontWeight: 600 }}>{pwdMsg}</div>}
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button onClick={handleChangePassword} disabled={pwdLoading} className="eval-btn-primary" style={{ flex: 1 }}>{pwdLoading ? '...' : 'Changer'}</button>
-                <button onClick={() => setShowPwdModal(false)} className="eval-btn-ghost" style={{ flex: 1 }}>Annuler</button>
-              </div>
+
+      {/* SETTINGS MODAL */}
+      {showSettingsModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 1100, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: '3rem', backdropFilter: 'blur(4px)', overflowY: 'auto' }} onClick={() => setShowSettingsModal(false)}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '10px', padding: '1.5rem', width: '100%', maxWidth: '520px', marginBottom: '2rem' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <span style={{ fontFamily: 'Chivo', fontWeight: 700, fontSize: '1rem' }}>Parametres</span>
+              <button onClick={() => setShowSettingsModal(false)} style={{ background: 'none', border: '1px solid var(--border)', padding: '4px 12px', cursor: 'pointer', fontSize: '0.7rem', borderRadius: '4px' }}>Fermer</button>
             </div>
+
+            {/* Settings tabs */}
+            <div style={{ display: 'flex', gap: '4px', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
+              {settingsTabs.map(t => (
+                <button key={t.id} onClick={() => setSettingsTab(t.id)} style={{ padding: '6px 12px', borderRadius: '4px 4px 0 0', border: 'none', background: settingsTab === t.id ? '#0ea5e920' : 'transparent', color: settingsTab === t.id ? '#0ea5e9' : 'var(--text-secondary)', fontWeight: settingsTab === t.id ? 700 : 400, cursor: 'pointer', fontSize: '0.75rem' }}>{t.label}</button>
+              ))}
+            </div>
+
+            {/* TAB: Mon compte */}
+            {settingsTab === 'compte' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ padding: '0.75rem', background: 'var(--bg)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, marginBottom: '0.5rem', color: '#0ea5e9' }}>Changer le mot de passe</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div style={{ position: 'relative' }}>
+                      <input type={showOld ? 'text' : 'password'} placeholder="Mot de passe actuel" value={pwdOld} onChange={e => setPwdOld(e.target.value)} style={{ ...ms.input, paddingRight: '42px' }} />
+                      <button type="button" onClick={() => setShowOld(!showOld)} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.7rem' }}>{showOld ? 'Cacher' : 'Voir'}</button>
+                    </div>
+                    <div style={{ position: 'relative' }}>
+                      <input type={showNew ? 'text' : 'password'} placeholder="Nouveau mot de passe" value={pwdNew} onChange={e => setPwdNew(e.target.value)} style={{ ...ms.input, paddingRight: '42px' }} />
+                      <button type="button" onClick={() => setShowNew(!showNew)} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.7rem' }}>{showNew ? 'Cacher' : 'Voir'}</button>
+                    </div>
+                    <input type={showNew ? 'text' : 'password'} placeholder="Confirmer" value={pwdConfirm} onChange={e => setPwdConfirm(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleChangePassword()} style={ms.input} />
+                    {pwdMsg && <div style={{ fontSize: '0.75rem', color: pwdMsg.includes('change') ? '#22c55e' : '#ef4444', fontWeight: 600 }}>{pwdMsg}</div>}
+                    <button onClick={handleChangePassword} disabled={pwdLoading} className="eval-btn-primary" style={{ fontSize: '0.75rem' }}>{pwdLoading ? '...' : 'Changer le mot de passe'}</button>
+                  </div>
+                </div>
+                <div style={{ padding: '0.75rem', background: 'var(--bg)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, marginBottom: '0.5rem', color: '#0ea5e9' }}>Modifier mon courriel</div>
+                  <input type="email" placeholder="Nouveau courriel" value={newEmail} onChange={e => setNewEmail(e.target.value)} style={ms.input} />
+                  {emailMsg && <div style={{ fontSize: '0.75rem', color: emailMsg.includes('jour') ? '#22c55e' : '#ef4444', fontWeight: 600, marginTop: '4px' }}>{emailMsg}</div>}
+                  <button onClick={handleChangeEmail} disabled={emailLoading} className="eval-btn-primary" style={{ fontSize: '0.75rem', marginTop: '0.5rem', width: '100%' }}>{emailLoading ? '...' : 'Mettre a jour'}</button>
+                </div>
+              </div>
+            )}
+
+            {/* TAB: Grossistes (directeur + admin) */}
+            {settingsTab === 'grossistes' && canManageWholesale && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div style={{ padding: '0.75rem', background: 'var(--bg)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, marginBottom: '0.5rem', color: '#a855f7' }}>Ajouter un grossiste</div>
+                  <div style={ms.row}>
+                    <div><label style={ms.label}>Prenom</label><input style={ms.input} value={wsNew.prenom} onChange={e => setWsNew(w => ({ ...w, prenom: e.target.value }))} /></div>
+                    <div><label style={ms.label}>Nom *</label><input style={ms.input} value={wsNew.nom} onChange={e => setWsNew(w => ({ ...w, nom: e.target.value }))} /></div>
+                  </div>
+                  <div style={{ marginTop: '0.5rem' }}><label style={ms.label}>Entreprise</label><input style={ms.input} value={wsNew.entreprise} onChange={e => setWsNew(w => ({ ...w, entreprise: e.target.value }))} placeholder="Nom de l'entreprise" /></div>
+                  <div style={{ ...ms.row, marginTop: '0.5rem' }}>
+                    <div><label style={ms.label}>Telephone</label><input style={ms.input} value={wsNew.telephone} onChange={e => setWsNew(w => ({ ...w, telephone: e.target.value }))} placeholder="418-..." /></div>
+                    <div><label style={ms.label}>Email *</label><input style={ms.input} type="email" value={wsNew.email} onChange={e => setWsNew(w => ({ ...w, email: e.target.value }))} /></div>
+                  </div>
+                  {wsMsg && <div style={{ fontSize: '0.75rem', color: wsMsg.includes('ajoute') || wsMsg.includes('Modifie') ? '#22c55e' : '#ef4444', fontWeight: 600, marginTop: '4px' }}>{wsMsg}</div>}
+                  <button onClick={handleAddWholesale} disabled={wsLoading} className="eval-btn-primary" style={{ fontSize: '0.75rem', marginTop: '0.5rem', width: '100%', background: '#a855f7' }}>{wsLoading ? '...' : 'Ajouter'}</button>
+                </div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Contacts ({wsContacts.length})</div>
+                {wsContacts.map(c => (
+                  <div key={c.id || c.email} style={{ padding: '0.5rem 0.75rem', background: 'var(--bg)', borderRadius: '6px', border: `1px solid ${c.active !== false ? 'var(--border)' : '#ef444440'}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                    {wsEdit?.id === c.id ? (
+                      <div style={{ flex: 1 }}>
+                        <div style={ms.row}>
+                          <input style={ms.input} value={wsEdit.name} onChange={e => setWsEdit(w => ({ ...w, name: e.target.value }))} placeholder="Nom" />
+                          <input style={ms.input} value={wsEdit.company || ''} onChange={e => setWsEdit(w => ({ ...w, company: e.target.value }))} placeholder="Entreprise" />
+                        </div>
+                        <div style={{ ...ms.row, marginTop: '4px' }}>
+                          <input style={ms.input} value={wsEdit.phone || ''} onChange={e => setWsEdit(w => ({ ...w, phone: e.target.value }))} placeholder="Tel" />
+                          <input style={ms.input} value={wsEdit.email} onChange={e => setWsEdit(w => ({ ...w, email: e.target.value }))} placeholder="Email" />
+                        </div>
+                        <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+                          <button onClick={handleEditWholesale} className="eval-btn-primary" style={{ fontSize: '0.65rem', flex: 1 }}>Sauvegarder</button>
+                          <button onClick={() => setWsEdit(null)} className="eval-btn-ghost" style={{ fontSize: '0.65rem' }}>Annuler</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 600, fontSize: '0.8rem' }}>{c.name} {c.company ? `(${c.company})` : ''}</div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{c.email} {c.phone ? `| ${c.phone}` : ''}</div>
+                        </div>
+                        <button onClick={() => setWsEdit({ ...c })} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.65rem', cursor: 'pointer', color: 'var(--text-secondary)' }}>Modifier</button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* TAB: Equipe (admin seulement) */}
+            {settingsTab === 'equipe' && isAdmin && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {userMsg && <div style={{ fontSize: '0.75rem', color: '#22c55e', fontWeight: 600 }}>{userMsg}</div>}
+                {settingsUsers.map(u => (
+                  <div key={u.username} style={{ padding: '0.5rem 0.75rem', background: 'var(--bg)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                    {userEdit?.username === u.username ? (
+                      <div>
+                        <div style={ms.row}>
+                          <div><label style={ms.label}>Nom</label><input style={ms.input} value={userEdit.name} onChange={e => setUserEdit(p => ({ ...p, name: e.target.value }))} /></div>
+                          <div><label style={ms.label}>Role</label><select style={ms.input} value={userEdit.role} onChange={e => setUserEdit(p => ({ ...p, role: e.target.value }))}><option value="conseiller">Conseiller</option><option value="directeur">Directeur</option><option value="admin">Admin</option></select></div>
+                        </div>
+                        <div style={{ ...ms.row, marginTop: '4px' }}>
+                          <div><label style={ms.label}>Courriel</label><input style={ms.input} type="email" value={userEdit.email || ''} onChange={e => setUserEdit(p => ({ ...p, email: e.target.value }))} /></div>
+                          <div><label style={ms.label}>Telephone</label><input style={ms.input} value={userEdit.phone || ''} onChange={e => setUserEdit(p => ({ ...p, phone: e.target.value }))} /></div>
+                        </div>
+                        <div style={{ marginTop: '4px' }}><label style={ms.label}>Nouveau mot de passe</label><input style={ms.input} value={userEdit.newPwd || ''} onChange={e => setUserEdit(p => ({ ...p, newPwd: e.target.value }))} placeholder="Laisser vide si inchange" /></div>
+                        <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
+                          <button onClick={() => handleEditUser(u, { name: userEdit.name, email: userEdit.email, phone: userEdit.phone, role: userEdit.role, password: userEdit.newPwd || undefined })} className="eval-btn-primary" style={{ fontSize: '0.65rem', flex: 1 }}>Sauvegarder</button>
+                          <button onClick={() => setUserEdit(null)} className="eval-btn-ghost" style={{ fontSize: '0.65rem' }}>Annuler</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: '0.8rem' }}>{u.name} <span style={{ fontSize: '0.65rem', color: u.role === 'admin' ? '#ef4444' : u.role === 'directeur' ? '#a855f7' : '#0ea5e9', fontWeight: 700 }}>{u.role}</span></div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{u.username} {u.email ? `| ${u.email}` : ''}</div>
+                        </div>
+                        <button onClick={() => setUserEdit({ ...u, newPwd: '' })} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.65rem', cursor: 'pointer', color: 'var(--text-secondary)' }}>Modifier</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
