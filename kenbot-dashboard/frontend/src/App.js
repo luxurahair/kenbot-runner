@@ -2420,13 +2420,13 @@ function EvaluationsTab({ user }) {
                               <div className="eval-ws-inline" onClick={e => e.stopPropagation()}>
                                 <div className="eval-ws-title">Envoyer aux grossistes {replyToEmail && <span className="eval-ws-reply">Retour: {replyToEmail}</span>}</div>
                                 {wsContacts.length === 0 ? (
-                                  <div className="eval-ws-empty">Aucun contact wholesale</div>
+                                  <div className="eval-ws-empty">Aucun grossiste. Ajoutez-en dans Mon compte &gt; Grossistes.</div>
                                 ) : (
                                   <>
                                     {wsContacts.map(c => (
                                       <label key={c.id || c.email} className="eval-ws-contact">
                                         <input type="checkbox" checked={!!wsChecked[c.id || c.email]} onChange={() => setWsChecked(s => ({ ...s, [c.id || c.email]: !s[c.id || c.email] }))} disabled={!c.email} />
-                                        <span className="eval-ws-name">{c.name || c.email}</span>
+                                        <span className="eval-ws-name">{c.name || c.email} {c.company ? `(${c.company})` : ''}</span>
                                         {wsSent[c.id || c.email] && <span className="eval-ws-sent">Envoye</span>}
                                       </label>
                                     ))}
