@@ -416,19 +416,139 @@ def parse_vehicle_detail_simple(session: requests.Session, url: str) -> Dict[str
             price = re.sub(r"\s+", " ", m.group(1)).strip() + " $"
 
     # --------------------
+    # PDSF ("Était") — neufs uniquement. Prix affiché AVANT rabais manufacturier.
+    # Pattern Kennebec CMS: <span>Était</span> ... <span ... aria-label="Ancien prix"> 65 662 $</span>
+    # Un fallback texte est ajouté au cas où le markup change.
+    # --------------------
+    pdsf_int: Optional[int] = None
+    # 1. Pattern HTML précis (aria-label)
+    mpdsf = re.search(
+        r'Était</span>\s*<span[^>]*aria-label=["\']Ancien prix["\'][^>]*>\s*([\d\s\u202f\xa0.,]+)\s*\$',
+        html,
+        re.IGNORECASE,
+    )
+    if not mpdsf:
+        # 2. Fallback via aria-label seul
+        mpdsf = re.search(
+            r'aria-label=["\']Ancien prix["\'][^>]*>\s*([\d\s\u202f\xa0.,]+)\s*\$',
+            html,
+            re.IGNORECASE,
+        )
+    if not mpdsf:
+        # 3. Fallback texte "Était" suivi d'un prix dans les 300 chars
+        mpdsf = re.search(
+            r"Était[^\d$]{1,300}?(\d[\d\s\u202f\xa0.,]{2,})\s*\$",
+            html,
+            re.IGNORECASE | re.DOTALL,
+        )
+    if mpdsf:
+        raw_pdsf = re.sub(r"[^\d]", "", mpdsf.group(1))
+        try:
+            pdsf_int = int(raw_pdsf) if raw_pdsf else None
+        except Exception:
+            pdsf_int = None
+    # Rabais = PDSF - prix affiché (seulement si PDSF > prix)
+    current_price_int = _clean_price_int(price) if price else None
+    rabais_int: Optional[int] = None
+    if pdsf_int and current_price_int and pdsf_int > current_price_int:
+        rabais_int = pdsf_int - current_price_int
+    else:
+        # Si pas de PDSF détecté, on ne crée pas de rabais artificiel.
+        # Le routeur dashboard utilisera price_int comme PDSF de fallback côté CalcAuto.
+        rabais_int = None
+
+    # --------------------
     # photos sm360
     # --------------------
+    # Détection multi-sources: <img src|data-src>, <img srcset>, meta og:image,
+    # et fallback JSON-LD "image" field. Cap final à 10 photos uniques.
     photos: List[str] = []
+
+    def _is_valid_vehicle_photo(u: str) -> bool:
+        """True si l'URL semble être une photo de véhicule valide (pas un logo/thumbnail)."""
+        if not u or len(u) < 20:
+            return False
+        low = u.lower()
+        # Exclude logos, icons, thumbnails, placeholders (priority)
+        if any(bad in low for bad in ("logo", "icon", "placeholder", "/ir/w75h23/", "/thumbnail/", "-thumb", "/logo-", "sticky-", "favicon")):
+            return False
+        # 1. Real inventory photos (dealership-taken)
+        if "img.sm360.ca" in low and "/images/inventory/" in low:
+            return True
+        # 2. New-car catalog photos (manufacturer reference images — acceptable for
+        #    freshly-arrived vehicles where the dealer has not taken real photos yet)
+        if "img.sm360.ca" in low and "/images/newcar/" in low:
+            return True
+        # 3. Accept direct image URLs on the dealer site
+        if "kennebecdodge.ca" in low and ("/content/inventory/" in low or "/content/newcar/" in low):
+            return True
+        # 4. Any URL with obvious vehicle-photo dimensions
+        if any(tag in low for tag in ("/ir/w1280", "/ir/w1024", "/ir/w940", "/ir/w800")):
+            if any(ext in low for ext in (".jpg", ".jpeg", ".png", ".webp")):
+                return True
+        return False
+
+    # 1. <img> tags with src or data-src
     for img in soup.select("img"):
-        src = img.get("data-src") or img.get("src")
-        if not src:
-            continue
-        src = src if src.startswith("http") else urljoin(url, src)
-        low = src.lower()
-        if "img.sm360.ca" in low and "/images/inventory/" in low and "/ir/w75h23/" not in low:
-            photos.append(src)
+        for attr in ("data-src", "src", "data-lazy", "data-original"):
+            val = img.get(attr)
+            if val:
+                u = val if val.startswith("http") else urljoin(url, val)
+                if _is_valid_vehicle_photo(u):
+                    photos.append(u)
+                    break  # first valid URL for this img is enough
+
+    # 2. <img srcset> — take the highest-resolution URL
+    for img in soup.select("img[srcset]"):
+        srcset = img.get("srcset", "")
+        # Format: "url1 1x, url2 2x" OR "url1 400w, url2 800w"
+        candidates = []
+        for part in srcset.split(","):
+            part = part.strip()
+            if part:
+                bits = part.split()
+                if bits:
+                    candidates.append(bits[0])
+        if candidates:
+            u = candidates[-1]  # last is usually highest-res
+            if not u.startswith("http"):
+                u = urljoin(url, u)
+            if _is_valid_vehicle_photo(u):
+                photos.append(u)
+
+    # 3. Fallback: og:image meta if no photo found yet
+    if not photos:
+        og = soup.find("meta", attrs={"property": "og:image"})
+        if og:
+            u = og.get("content", "")
+            if u:
+                if not u.startswith("http"):
+                    u = urljoin(url, u)
+                if _is_valid_vehicle_photo(u):
+                    photos.append(u)
+
+    # 4. Fallback: JSON-LD image field (CarDealer schema)
+    if not photos:
+        for script in soup.select('script[type="application/ld+json"]'):
+            try:
+                import json as _json
+                data = _json.loads(script.string or "{}")
+            except Exception:
+                continue
+            if isinstance(data, list):
+                data = data[0] if data else {}
+            img_val = data.get("image") if isinstance(data, dict) else None
+            if isinstance(img_val, str):
+                if _is_valid_vehicle_photo(img_val):
+                    photos.append(img_val)
+            elif isinstance(img_val, list):
+                for u in img_val:
+                    if isinstance(u, str) and _is_valid_vehicle_photo(u):
+                        photos.append(u)
 
     photos = uniq_keep_order(photos)
+    # Cap at 10 (Facebook limit and consistency with UI upload)
+    photos = photos[:10]
 
     # --------------------
     # features / comfort / specs
@@ -457,6 +577,8 @@ def parse_vehicle_detail_simple(session: requests.Session, url: str) -> Dict[str
         "mileage": mileage,
         "price_int": _clean_price_int(price) if price else None,
         "km_int": _clean_km_int(mileage) if mileage else None,
+        "pdsf_int": pdsf_int,
+        "rabais_int": rabais_int,
         "photos": photos,
         "features": features,
         "comfort": comfort,

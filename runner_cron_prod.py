@@ -479,17 +479,74 @@ def _clean_ai_output(text: str) -> str:
     return "\n".join(cleaned).strip()
 
 
+def _inject_pdsf_block_and_disclaimer(text: str, v: Dict[str, Any]) -> str:
+    """NEW 2026-04-22 — Pour les véhicules NEUFS avec PDSF connu, insère un bloc
+    storytelling en tête du post (PDSF / rabais / prix final) et append
+    un disclaimer légal + lien vers la fiche manufacturier avant le footer.
+
+    Occasion: pas de modification.
+    Neuf sans PDSF: pas de bloc (fallback = texte original inchangé).
+    """
+    if not v or not isinstance(v, dict):
+        return text
+    condition = (v.get("condition") or "occasion").strip().lower()
+    if condition != "neuf":
+        return text
+
+    pdsf = v.get("pdsf_int")
+    price = v.get("price_int")
+    rabais = v.get("rabais_int")
+    vehicle_url = (v.get("url") or "").strip()
+
+    def _fmt(n: Any) -> str:
+        try:
+            return f"{int(n):,}".replace(",", " ") + " $"
+        except Exception:
+            return ""
+
+    # 1. Bloc storytelling en tête si PDSF + prix + rabais > 0
+    pdsf_block = ""
+    if pdsf and price and rabais and rabais > 0:
+        pdsf_block = (
+            f"💰 PDSF affiché : {_fmt(pdsf)}\n"
+            f"✂️ Vous profitez d'un rabais de {_fmt(rabais)}\n"
+            f"🔥 Il vous revient à seulement {_fmt(price)}\n"
+        )
+
+    # 2. Disclaimer + lien fiche
+    disclaimer_lines = []
+    disclaimer_lines.append("")  # blank line
+    disclaimer_lines.append("* Prix conditionnel à votre choix de financement ou rabais.")
+    if vehicle_url:
+        disclaimer_lines.append(f"🔗 Fiche détaillée : {vehicle_url}")
+    disclaimer_tail = "\n".join(disclaimer_lines)
+
+    parts = []
+    if pdsf_block:
+        parts.append(pdsf_block)
+    if text:
+        parts.append(text.strip())
+    if disclaimer_tail.strip():
+        parts.append(disclaimer_tail)
+
+    return "\n\n".join(parts)
+
+
 def _ensure_contact_footer(text: str, v: Dict[str, Any] = None) -> str:
     """Nettoie le texte IA puis ajoute le footer avec hashtags SEO dynamiques.
     Applique aussi le sanitizer ultime (retire leaks 'PROFIL DU VÉHICULE',
-    'Type: pickup_hd', tinyurl morts, etc.)."""
+    'Type: pickup_hd', tinyurl morts, etc.).
+    Pour les NEUFS avec PDSF: injecte le bloc storytelling + disclaimer + lien fiche."""
     text = _clean_ai_output(text)
-    # Sanitize APRES le clean IA et AVANT l'ajout du footer
+    # Sanitize APRES le clean IA et AVANT l'injection PDSF
     try:
         from pipeline.cliches import sanitize_ad_text
         text = sanitize_ad_text(text)
     except Exception as _e:
         print(f"[SANITIZE] pipeline.cliches.sanitize_ad_text indisponible: {_e}", flush=True)
+    # NEW 2026-04-22: bloc PDSF + disclaimer + lien fiche (neuf uniquement)
+    if v:
+        text = _inject_pdsf_block_and_disclaimer(text, v)
     if v:
         seo_tags = _build_seo_hashtags(v)
         footer = get_dealer_footer(hashtags=seo_tags)
@@ -1196,6 +1253,8 @@ def main() -> None:
                 "vin": (v.get("vin") or "").strip().upper() or None,
                 "price_int": v.get("price_int"),
                 "km_int": v.get("km_int"),
+                "pdsf_int": v.get("pdsf_int"),       # NEW: prix "Était" manufacturier (neuf only)
+                "rabais_int": v.get("rabais_int"),   # NEW: rabais calculé = pdsf - price
                 "status": "ACTIVE",
                 "condition": v.get("condition") or "occasion",
                 "last_seen": now,
@@ -1215,10 +1274,25 @@ def main() -> None:
                 _upsert_inv(sb, inv_rows_d)
                 n_neuf = sum(1 for r in inv_rows_d if r["condition"] == "neuf")
                 n_occ = len(inv_rows_d) - n_neuf
-                print(f"[INV] Supabase inventory upsert OK: {n_occ} occasion + {n_neuf} neuf", flush=True)
+                n_pdsf = sum(1 for r in inv_rows_d if r.get("pdsf_int"))
+                print(f"[INV] Supabase inventory upsert OK: {n_occ} occasion + {n_neuf} neuf ({n_pdsf} with PDSF)", flush=True)
             except Exception as e:
-                # Fallback: retry without `condition` if the column doesn't exist yet
-                if "condition" in str(e).lower() or "42703" in str(e):
+                # Fallback 1: retry without pdsf_int/rabais_int if those columns don't exist yet
+                emsg = str(e).lower()
+                if any(k in emsg for k in ("pdsf_int", "rabais_int")) or "42703" in str(e):
+                    rows_no_pdsf = [{k: x for k, x in r.items() if k not in ("pdsf_int", "rabais_int")} for r in inv_rows_d]
+                    try:
+                        _upsert_inv(sb, rows_no_pdsf)
+                        print(f"[INV] Upsert fallback without `pdsf_int/rabais_int`: {len(rows_no_pdsf)} rows", flush=True)
+                    except Exception as e2:
+                        emsg2 = str(e2).lower()
+                        if "condition" in emsg2 or "42703" in str(e2):
+                            rows_no_cond = [{k: x for k, x in r.items() if k != "condition"} for r in rows_no_pdsf]
+                            _upsert_inv(sb, rows_no_cond)
+                            print(f"[INV] Upsert fallback without condition+pdsf: {len(rows_no_cond)} rows", flush=True)
+                        else:
+                            raise
+                elif "condition" in emsg:
                     rows_no_cond = [{k: x for k, x in r.items() if k != "condition"} for r in inv_rows_d]
                     _upsert_inv(sb, rows_no_cond)
                     print(f"[INV] Upsert fallback without `condition`: {len(rows_no_cond)} rows", flush=True)
