@@ -29,24 +29,39 @@ def _get_openai():
 
 # ─── Prompts par type de véhicule ───
 
-SYSTEM_PROMPT = """Tu es un vendeur passionné chez Kennebec Dodge Chrysler à Saint-Georges.
-Tu écris des annonces Facebook pour des véhicules d'occasion.
+SYSTEM_PROMPT = """Tu es un vendeur chez Kennebec Dodge Chrysler a Saint-Georges.
+Tu ecris des annonces Facebook pour des vehicules automobiles (neufs OU occasions).
 
-RÈGLES ABSOLUES:
-- Tu écris en français québécois naturel. Pas de français de France. Pas de robot.
-- Tu parles comme un VRAI vendeur qui connaît ses chars. Pas de phrases génériques.
-- JAMAIS de "Prêt à dominer les routes" ou "faire tourner les têtes" — c'est cliché.
-- JAMAIS de "sillonner la Beauce" ou "conquérir les chemins" — c'est du robot.
+REGLES DE CONDITION (TRES IMPORTANT):
+- Le contexte te fournit CONDITION: "neuf" ou "occasion".
+- SI CONDITION = "neuf":
+  * NE JAMAIS utiliser: "occasion", "usage", "usagé", "comme neuf", "inspection", "historique", "faible kilometrage", "un seul proprietaire", "ancien proprietaire", "reprise"
+  * Mettre l'accent sur: disponibilite, equipements confirmes, version/trim, garantie constructeur, financement promotionnel (seulement si confirme)
+  * Le kilometrage peut etre mentionne comme "0 km" ou "flambant neuf" mais n'en faire pas un argument de vente
+- SI CONDITION = "occasion":
+  * Le kilometrage PEUT etre un argument (ex: "faible kilometrage", "28 000 km seulement")
+  * Tu peux valoriser l'etat, l'entretien, l'historique verifie
+  * Eviter "flambant neuf" ou "direct de l'usine"
+
+REGLES ABSOLUES:
+- Tu ecris en francais quebecois naturel. Pas de francais de France. Pas de robot.
+- Tu parles comme un VRAI vendeur qui connait ses chars. Pas de phrases generiques.
 - JAMAIS mentionner "la Beauce", "routes de la Beauce" ou "paysages beauceron". On vend des chars, pas du tourisme.
-- ABSOLUMENT AUCUN mot vulgaire, grossier ou à caractère sexuel. C'est une page PROFESSIONNELLE d'un concessionnaire. Le ton est passionné mais TOUJOURS respectueux et professionnel.
-- Chaque texte doit être UNIQUE. Si tu vends un Challenger, parle du V8. Si c'est un Wrangler, parle du off-road.
-- Le ton est direct, authentique, passionné. Comme si tu parlais à un client au showroom.
-- Tu CONNAIS les véhicules. Tu sais ce qui rend chaque modèle spécial.
-- Maximum 3-4 phrases pour l'intro. Pas de roman.
+- ABSOLUMENT AUCUN mot vulgaire, grossier ou a caractere sexuel.
+- Chaque texte doit etre UNIQUE.
+- Le ton est direct, authentique, passionne.
+
+REGLES INTRO — CRITIQUES:
+- JAMAIS commencer par parler de toi, de ton experience, de ta passion ou de tes annees dans le metier.
+- JAMAIS "En tant qu'expert automobile", "Passionne depuis...", "Apres deux decennies...", "Avec mes X annees d'experience..."
+- JAMAIS "faire tourner les tetes", "experience de conduite exceptionnelle", "choix exceptionnel", "veritable partenaire", "pret a dominer", "conquérir les chemins", "sillonner", "ce bijou", "cette merveille"
+- TOUJOURS commencer par LE VEHICULE. La premiere phrase doit parler du CHAR, pas du vendeur.
+- Varie les ouvertures: question au lecteur, chiffre (HP, km), mise en situation, fait precis, prix, rarete.
+- Maximum 2-3 phrases pour l'intro. Court et punchy.
 - Pas de hashtags dans l'intro.
-- Pas d'emojis dans l'intro (ils viennent après dans le corps de l'annonce).
-- JAMAIS mentionner "Daniel Giroux" ou tout nom de vendeur dans l'intro du haut. Le nom sera ajouté automatiquement dans le footer.
-- Le PRIX doit TOUJOURS apparaître clairement dans le corps de l'annonce (ex: "💰 34 995 $").
+- Pas d'emojis dans l'intro (ils viennent apres dans le corps de l'annonce).
+- JAMAIS mentionner "Daniel Giroux" ou tout nom de vendeur dans l'intro.
+- Le PRIX doit TOUJOURS apparaitre clairement dans le corps (ex: "💰 34 995 $").
 """
 
 def _build_prompt_for_vehicle(ctx: Dict[str, Any], event: str = "NEW", options_text: str = "") -> str:
@@ -65,6 +80,7 @@ def _build_prompt_for_vehicle(ctx: Dict[str, Any], event: str = "NEW", options_t
 
     # Intelligence véhicule
     vehicle_type = ctx.get("vehicle_type", "general")
+    condition = (ctx.get("condition") or "occasion").strip().lower()
     hp = ctx.get("hp", "")
     engine = ctx.get("engine", "")
     trim_vibe = ctx.get("trim_vibe", "")
@@ -93,6 +109,7 @@ def _build_prompt_for_vehicle(ctx: Dict[str, Any], event: str = "NEW", options_t
     prompt = f"""Écris une annonce Facebook pour ce véhicule:
 
 VÉHICULE: {title}
+CONDITION: {condition}  ← IMPORTANT: adapte ton discours (neuf=pas de km/historique, occasion=km/etat OK)
 PRIX: {price_fmt}
 KILOMÉTRAGE: {km_fmt} ({km_desc})
 POSITIONNEMENT PRIX: {price_desc}
@@ -107,10 +124,14 @@ OPTIONS/ÉQUIPEMENTS CONFIRMÉS:
 ANGLES DE VENTE SUGGÉRÉS: {', '.join(brand_angles[:3]) if brand_angles else 'qualité, valeur, confiance'}
 
 INSTRUCTIONS:
-1. Écris une INTRO de 3-4 phrases maximum. Naturelle, directe, passionnée.
-   - Mentionne ce qui rend CE véhicule spécial (pas une intro générique)
-   - Si tu connais le moteur/HP, mentionne-le naturellement
-   - Adapte le ton au type: {"adrénaline et son du moteur" if vehicle_type == "muscle_car" else "robustesse et capacité" if vehicle_type in ("pickup", "pickup_hd") else "aventure et liberté" if vehicle_type == "off_road" else "confort et raffinement" if vehicle_type == "suv_premium" else "style et économie" if vehicle_type in ("citadine", "suv_compact") else "exclusivité et rêve" if vehicle_type in ("exotique", "collector") else "polyvalence et fiabilité"}
+1. Ecris une INTRO de 2-3 phrases maximum. COURTE et PUNCHY.
+   REGLES CRITIQUES POUR L'INTRO:
+   - La PREMIERE phrase doit parler DU VEHICULE, jamais du vendeur
+   - INTERDIT de commencer par ton experience, ta passion, tes annees dans le metier
+   - INTERDIT: "En tant qu'expert", "Passionne depuis...", "Apres deux decennies..."
+   - INTERDIT: "faire tourner les tetes", "choix exceptionnel", "veritable partenaire"
+   - Commence par le CHAR: son nom, ses specs, son prix, sa rarete, un chiffre
+   - Adapte le ton au type: {"adrenaline et son du moteur" if vehicle_type == "muscle_car" else "robustesse et capacite" if vehicle_type in ("pickup", "pickup_hd") else "aventure et liberte" if vehicle_type == "off_road" else "confort et raffinement" if vehicle_type == "suv_premium" else "style et economie" if vehicle_type in ("citadine", "suv_compact") else "exclusivite et reve" if vehicle_type in ("exotique", "collector") else "polyvalence et fiabilite"}
 
 2. Puis le CORPS structuré:
    - Titre avec le nom complet et l'année
@@ -121,8 +142,8 @@ INSTRUCTIONS:
    - Si c'est un Stellantis avec sticker: mention "Window Sticker vérifié"
 
 3. NE METS PAS de nom de vendeur dans le texte (ni "Daniel Giroux" ni aucun nom). NE METS PAS de footer, de coordonnées, de hashtags. Le footer sera ajouté automatiquement après.
-   Intègre les 'CARACTÉRISTIQUES CERTIFIÉES' dans l'annonce avec ce titre exact.
-   NE METS PAS 'NHTSA', 'VIN decode' ou tout terme technique interne.
+   NE METS PAS 'NHTSA', 'VIN decode', 'PROFIL DU VÉHICULE', 'Type: pickup_hd' ou tout terme/etiquette technique interne.
+   Les specs certifiees peuvent etre integrees dans le corps, mais reformulees naturellement (pas recopiees brutes).
 
 FORMAT DE SORTIE: Texte prêt à copier-coller sur Facebook. Utilise des emojis avec parcimonie dans le corps (pas dans l'intro).
 """
@@ -143,11 +164,16 @@ Nouveau prix: {new_price}
 
 # ─── Variations d'intro pour éviter la répétition ───
 INTRO_STYLES = [
-    "direct",       # Va droit au but: "J'ai un [vehicule] qui..."
-    "storytelling",  # Raconte une mini-histoire: "Y'a des chars qui..."
-    "question",     # Pose une question: "Tu cherches un truck qui..."
-    "expertise",    # Montre ta connaissance: "Le [modèle], c'est..."
-    "opportunité",  # Focus sur le deal: "Celui-là, à ce prix-là..."
+    "NOUVELLE ARRIVAGE: Commence par 'Nouvelle arrivage!' ou 'Juste rentre!' puis decris le char",
+    "CHIFFRE PUNCH: Commence par un chiffre (HP, km bas, prix). Ex: '395 chevaux, 25 000 km.'",
+    "QUESTION CLIENT: Pose une question directe. Ex: 'Tu cherches un pickup fiable?'",
+    "LE CHAR PARLE: Decris le vehicule. Ex: 'Regarde-moi ce RAM la...'",
+    "OCCASION RARE: Mets l'accent sur la rarete. Ex: 'Un Rubicon 2024 a ce prix, ca se voit pas souvent.'",
+    "PRIX/DEAL: Commence par le prix. Ex: 'A 34 995$, t'auras pas mieux.'",
+    "POUR QUI: Commence par le client ideal. Ex: 'Pour celui qui a besoin d'un vrai camion...'",
+    "SPEC TECHNIQUE: La spec qui tue. Ex: 'V8 6.4L, 485 chevaux. Point final.'",
+    "HISTOIRE COURTE: Mini contexte. Ex: 'Un seul proprio, entretien chez nous.'",
+    "SAISON: Lie au moment. Ex: 'Juste a temps pour l'ete!' ou 'Un 4x4 ca se refuse pas.'",
 ]
 
 
@@ -204,7 +230,7 @@ def generate_smart_text(
     # Construire le prompt
     prompt = _build_prompt_for_vehicle(ctx, event, options_text)
     if vin_specs_text:
-        prompt += f"\n\nCARACTÉRISTIQUES CERTIFIÉES:\n{vin_specs_text}"
+        prompt += f"\n\n[SPECS CERTIFIEES — a integrer dans le corps, reformulees]\n{vin_specs_text}"
     prompt += f"\n\nSTYLE D'INTRO: {style}"
 
     try:
@@ -283,28 +309,52 @@ Mentionne ce qui rend CE véhicule spécial."""
 
 
 def _post_process(text: str) -> str:
-    """Nettoyage post-génération."""
+    """Nettoyage post-génération. Utilise le filtre centralisé pipeline/cliches.py."""
     # Retirer les guillemets englobants
     text = text.strip('"').strip("'")
 
-    # Retirer les clichés qui auraient pu passer
+    # Utiliser le filtre centralisé (source unique de vérité)
+    try:
+        from pipeline.cliches import remove_cliche_lines
+        text = remove_cliche_lines(text)
+        return text.strip()
+    except Exception as e:
+        print(f"[LLM_V3 POSTPROCESS] pipeline.cliches indisponible: {e}", flush=True)
+
+    # Fallback: liste locale minimale
     cliches = [
-        "prêt à dominer",
-        "faire tourner les têtes",
-        "sillonner la beauce",
-        "conquérir les chemins",
+        "prêt à dominer", "pret a dominer",
+        "faire tourner les têtes", "faire tourner les tetes",
+        "sillonner la beauce", "sillonner les routes",
+        "conquérir les chemins", "conquerir les chemins",
         "dominer les routes",
         "parcourir les routes de beauce",
         "arpenter les routes",
-        "routes de la beauce",
-        "routes de beauce",
+        "routes de la beauce", "routes de beauce",
         "chemins de la beauce",
-        "paysages de la beauce",
-        "paysages beauceron",
+        "paysages de la beauce", "paysages beauceron",
+        "en tant qu'expert", "en tant qu expert", "expert automobile",
+        "20 ans d'expérience", "20 ans d experience",
+        "près de 20 ans", "pres de 20 ans",
+        "années d'expérience", "annees d'experience",
+        "passionné par les voitures depuis", "passionne par les voitures depuis",
+        "après deux décennies", "apres deux decennies",
+        "deux décennies d'expérience", "deux decennies d experience",
+        "en tant que passionné", "en tant que passionne",
+        "expérience de conduite exceptionnelle",
+        "cette merveille", "ce bijou", "cette beauté",
+        "véritable partenaire", "veritable partenaire",
+        "choix exceptionnel", "n'attend plus que toi",
+        "parfait pour l'hiver", "vous séduira",
+        "esprit d'aventure", "sensations fortes",
+        "fiabilité légendaire", "fiabilite legendaire",
+        "ravi de vous présenter", "ravi de vous presenter",
+        "permettez-moi", "permettez moi",
+        "ne manquera pas d'impressionner",
+        "saura combler", "saura impressionner",
     ]
     for c in cliches:
         if c in text.lower():
-            # Retirer la phrase contenant le cliché
             lines = text.split("\n")
             text = "\n".join(l for l in lines if c not in l.lower())
 

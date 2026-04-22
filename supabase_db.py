@@ -73,6 +73,12 @@ def get_inventory_map(sb: Client) -> Dict[str, Dict[str, Any]]:
 from postgrest.exceptions import APIError
 
 def upsert_post(sb: Client, row: Dict[str, Any]) -> None:
+    """
+    Upsert stable par STOCK (source de vérité).
+    Le slug peut changer entre runs si le titre Kennebec change (ex: ajout de "A/C"),
+    mais le stock est stable. On identifie toujours le row par stock, puis on met à jour
+    le slug + autres colonnes. Cela empêche la boucle infinie NEW_FROM_RESET.
+    """
     if not row:
         return
 
@@ -82,36 +88,63 @@ def upsert_post(sb: Client, row: Dict[str, Any]) -> None:
     if not stock:
         raise ValueError("upsert_post: stock obligatoire")
 
-    row["stock"] = stock
-    row["slug"] = slug or None
+    # Filtrer seulement les colonnes connues de la table posts
+    # 2026-04-23: ajout `condition` pour tracer neuf/occasion jusqu'a posts
+    # (avant, `inventory` savait mais `posts` oubliait → pilotage a l'aveugle)
+    KNOWN_COLS = {"slug", "stock", "post_id", "status", "published_at", "last_updated_at",
+                  "sold_at", "base_text", "no_photo", "photo_count", "old_post_id",
+                  "condition"}
+    clean_row = {k: v for k, v in row.items() if k in KNOWN_COLS}
+    clean_row["stock"] = stock
+    if slug:
+        clean_row["slug"] = slug
 
-    # Upsert on slug (PRIMARY KEY) — si le slug existe, on update
+    # 1. Chercher un row existant PAR STOCK (identité stable)
     try:
-        sb.table("posts").upsert(
-            row,
-            on_conflict="slug"
-        ).execute()
+        existing = (
+            sb.table("posts")
+            .select("slug")
+            .eq("stock", stock)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        print(f"[UPSERT_POST LOOKUP ERROR] stock={stock} err={e}", flush=True)
+        existing = []
+
+    if existing:
+        # Row existe → UPDATE par slug actuel (PK). Le slug peut changer dans ce update.
+        existing_slug = existing[0].get("slug")
+        try:
+            sb.table("posts").update(clean_row).eq("slug", existing_slug).execute()
+        except Exception as e:
+            err_msg = str(e)
+            # Si le nouveau slug rentre en collision avec un autre row (rare), fallback update par stock
+            if "23505" in err_msg or "duplicate key" in err_msg.lower():
+                try:
+                    clean_no_slug = {k: v for k, v in clean_row.items() if k != "slug"}
+                    sb.table("posts").update(clean_no_slug).eq("stock", stock).execute()
+                except Exception as e2:
+                    print(f"[UPSERT_POST UPDATE FALLBACK] stock={stock} err={e2}", flush=True)
+            else:
+                print(f"[UPSERT_POST UPDATE ERROR] stock={stock} slug={existing_slug!r}->{slug!r} err={e}", flush=True)
+        return
+
+    # 2. Aucun row existant → INSERT nouveau
+    clean_row["slug"] = slug or None
+    try:
+        sb.table("posts").insert(clean_row).execute()
     except Exception as e:
         err_msg = str(e)
+        # Race condition: un autre process vient d'insérer ce stock → update
         if "23505" in err_msg or "duplicate key" in err_msg.lower():
-            # Conflit stock unique — update par slug (PK)
             try:
-                update_row = {k: v for k, v in row.items()}
-                sb.table("posts").update(update_row).eq("slug", slug).execute()
+                clean_no_slug = {k: v for k, v in clean_row.items() if k != "slug"}
+                sb.table("posts").update(clean_no_slug).eq("stock", stock).execute()
             except Exception as e2:
-                print(f"[UPSERT_POST FALLBACK] slug={slug} stock={stock} err={e2}", flush=True)
-                # Dernier recours: update seulement les champs critiques par slug
-                try:
-                    sb.table("posts").update({
-                        "post_id": row.get("post_id"),
-                        "status": row.get("status"),
-                        "base_text": row.get("base_text"),
-                        "last_updated_at": row.get("last_updated_at"),
-                        "no_photo": row.get("no_photo"),
-                        "photo_count": row.get("photo_count"),
-                    }).eq("slug", slug).execute()
-                except Exception as e3:
-                    print(f"[UPSERT_POST LAST_RESORT] slug={slug} err={e3}", flush=True)
+                print(f"[UPSERT_POST INSERT RACE] stock={stock} err={e2}", flush=True)
         else:
             raise
 

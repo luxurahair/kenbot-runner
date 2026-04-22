@@ -61,7 +61,10 @@ def parse_inventory_listing_urls(base_url: str, inventory_path: str, html: str) 
     for a in soup.find_all("a", href=True):
         add(a.get("href") or "")
 
-    for m in re.findall(r'(/fr/inventaire-occasion/[^\s"\'<>]+?-id\d+)', html, flags=re.IGNORECASE):
+    # Regex dynamique basée sur inventory_path (supporte neuf ET occasion)
+    path_for_regex = re.escape(inventory_path.rstrip("/"))
+    pattern = rf'({path_for_regex}/[^\s"\'<>]+?-id\d+)'
+    for m in re.findall(pattern, html, flags=re.IGNORECASE):
         add(m)
 
     return sorted(out)

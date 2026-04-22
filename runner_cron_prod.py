@@ -99,6 +99,15 @@ for name in (".env.local", ".kenbot_env", ".env"):
 
 BASE_URL = os.getenv("KENBOT_BASE_URL", "https://www.kennebecdodge.ca").rstrip("/")
 INVENTORY_PATH = os.getenv("KENBOT_INVENTORY_PATH", "/fr/inventaire-occasion/").strip()
+# NEW 2026-04-22: parallel scraping of the new-vehicle inventory.
+# Default enabled; disable by setting KENBOT_INCLUDE_NEUF=0 in Render env.
+INVENTORY_NEUF_PATH = os.getenv("KENBOT_INVENTORY_NEUF_PATH", "/fr/inventaire-neuf/").strip()
+INCLUDE_NEUF = os.getenv("KENBOT_INCLUDE_NEUF", "1").strip().lower() not in ("0", "false", "no", "off")
+# Safety: we don't want to spam FB with 72 new-car posts on the first run.
+# Unless explicitly set to 1, new vehicles are scraped and stored but NOT auto-posted.
+POST_NEUF_TO_FB = os.getenv("KENBOT_POST_NEUF_TO_FB", "0").strip().lower() in ("1", "true", "yes", "on")
+# 2026-04-23: plafond specifique neuf (evite de spammer FB au premier cycle)
+POST_NEUF_MAX_PER_RUN = int(os.getenv("KENBOT_POST_NEUF_MAX_PER_RUN", "3"))
 TEXT_ENGINE_URL = (os.getenv("KENBOT_TEXT_ENGINE_URL") or "").strip()
 FB_PAGE_ID = (os.getenv("KENBOT_FB_PAGE_ID") or os.getenv("FB_PAGE_ID") or "").strip()
 FB_TOKEN = (os.getenv("KENBOT_FB_ACCESS_TOKEN") or os.getenv("FB_PAGE_ACCESS_TOKEN") or "").strip()
@@ -471,21 +480,30 @@ def _clean_ai_output(text: str) -> str:
 
 
 def _ensure_contact_footer(text: str, v: Dict[str, Any] = None) -> str:
-    """Nettoie le texte IA puis ajoute le footer avec hashtags SEO dynamiques."""
+    """Nettoie le texte IA puis ajoute le footer avec hashtags SEO dynamiques.
+    Applique aussi le sanitizer ultime (retire leaks 'PROFIL DU VÉHICULE',
+    'Type: pickup_hd', tinyurl morts, etc.)."""
     text = _clean_ai_output(text)
+    # Sanitize APRES le clean IA et AVANT l'ajout du footer
+    try:
+        from pipeline.cliches import sanitize_ad_text
+        text = sanitize_ad_text(text)
+    except Exception as _e:
+        print(f"[SANITIZE] pipeline.cliches.sanitize_ad_text indisponible: {_e}", flush=True)
     if v:
         seo_tags = _build_seo_hashtags(v)
         footer = get_dealer_footer(hashtags=seo_tags)
     else:
         footer = None
-    return add_footer_if_missing(text, footer=footer)
-    """Ajoute le footer avec hashtags SEO dynamiques."""
-    if v:
-        seo_tags = _build_seo_hashtags(v)
-        footer = get_dealer_footer(hashtags=seo_tags)
-    else:
-        footer = None
-    return add_footer_if_missing(text, footer=footer)
+    final = add_footer_if_missing(text, footer=footer)
+    # Sanitize UNE DERNIERE FOIS apres footer (au cas ou le footer lui-meme
+    # contient du legacy — belt-and-suspenders)
+    try:
+        from pipeline.cliches import sanitize_ad_text
+        final = sanitize_ad_text(final)
+    except Exception:
+        pass
+    return final
 
 
 def _build_seo_hashtags(v: Dict[str, Any]) -> List[str]:
@@ -716,17 +734,18 @@ def _humanize_sticker_text(
             pass
 
     system_msg = (
-        "Tu es un conseiller expert depuis pres de 20 ans chez Kennebec Dodge Chrysler a Saint-Georges.\n"
-        "Tu es reconnu pour ton expertise, ta passion des vehicules et ton approche humaine.\n"
+        "Tu es un conseiller senior chez Kennebec Dodge Chrysler a Saint-Georges (Beauce).\n"
+        "Tu connais les vehicules a fond mais tu n'en parles JAMAIS en tant que personnage.\n"
         "Tu recois une annonce Facebook generee a partir du Window Sticker d'un vehicule Stellantis.\n\n"
         "TON TRAVAIL — Humaniser cette annonce en respectant ces regles STRICTES:\n\n"
         "1. INTRO (3-4 phrases au debut):\n"
-        "   Ecris en tant qu'expert automobile passionne.\n"
-        "   Ton ton: professionnel, passionne, quebecois, authentique.\n"
-        "   Mentionne TON expertise ou TON avis personnel sur le vehicule.\n"
+        "   Ecris au sujet du VEHICULE, pas de toi. Decris-le en factuel + engageant.\n"
+        "   Ton ton: professionnel, concret, quebecois, direct.\n"
+        "   INTERDIT ABSOLU: 'En tant qu'expert', 'Comme expert', 'Expert automobile',\n"
+        "      'Passionne depuis...', 'Apres X annees d'experience', 'Avec mes X annees...'\n"
+        "   INTERDIT: mentionner 'Daniel Giroux', 'mon expertise', 'mon avis', 'ravi de vous presenter'\n"
         "   Pas de cliches, pas de vulgarite. JAMAIS de 'sillonner', 'dominer', 'Beauce', 'routes de la Beauce'.\n"
-        "   ABSOLUMENT AUCUN mot vulgaire, grossier ou a caractere sexuel.\n"
-        "   JAMAIS mentionner 'Daniel Giroux' ou tout nom de vendeur dans l'intro.\n\n"
+        "   ABSOLUMENT AUCUN mot vulgaire, grossier ou a caractere sexuel.\n\n"
         "2. TITRE:\n"
         "   Remplace SEULEMENT la premiere ligne (titre entre emojis) par un titre plus vendeur.\n\n"
         "3. PRIX: Le prix doit TOUJOURS apparaitre clairement dans l'annonce.\n\n"
@@ -736,23 +755,36 @@ def _humanize_sticker_text(
         "   NE SUPPRIME AUCUNE LIGNE. Chaque ✅ et ▫️ doit rester.\n"
         "   Traduis les noms techniques en francais lisible.\n\n"
         "5. NE METS AUCUN LIEN vers kennebecdodge.ca. Pas de 'Fiche complete'.\n"
+        "6. NE JAMAIS utiliser tinyurl.com — les liens doivent etre directs vers\n"
+        "   kenbot-dashboard-five.vercel.app/reprise (pour evaluation) ou chrysler.com (sticker).\n"
         "   Le lien Window Sticker Chrysler est OK s'il est deja present.\n\n"
         "6. NE DUPLIQUE PAS les sections (echanges, footer, hashtags).\n"
         "   Le footer professionnel avec la signature sera ajoute automatiquement.\n\n"
         "NE RAJOUTE RIEN a la fin. Pas de footer, pas de hashtags, pas de coordonnees.\n"
         "Termine apres la derniere option ou le lien Window Sticker.\n\n"
-        "IMPORTANT: Intègre les informations ci-dessous dans l'annonce de façon professionnelle.\n"
-        "La section 'PROFIL DU VÉHICULE' doit apparaitre avec ce titre exact.\n"
-        "La section 'CARACTÉRISTIQUES CERTIFIÉES' doit apparaitre avec ce titre exact.\n"
-        "NE METS PAS de markdown (###, **, etc.) — c'est du texte Facebook.\n"
-        "NE METS PAS 'NHTSA', 'Window Sticker', 'VIN decode' ou tout terme technique interne."
+        "IMPORTANT:\n"
+        "- Les informations de CONTEXTE INTERNE ci-dessous servent UNIQUEMENT a guider ton\n"
+        "  ton et ton angle de vente. NE LES RECOPIE JAMAIS telles quelles dans l'annonce.\n"
+        "  Ne jamais ecrire 'PROFIL DU VEHICULE', 'Marque: le truck...', 'Type: pickup_hd',\n"
+        "  'Modele: le heavy-duty...' ou toute etiquette similaire.\n"
+        "- Les 'CARACTERISTIQUES CERTIFIEES' (moteur, HP, transmission, motricite) peuvent\n"
+        "  etre integrees dans le corps de l'annonce, mais REFORMULEES en francais lisible\n"
+        "  (ex: 'Moteur 6.7L Cummins turbo diesel, 370 HP'), PAS recopiees brutes.\n"
+        "- NE METS PAS de markdown (###, **, etc.) — c'est du texte Facebook.\n"
+        "- NE METS PAS 'NHTSA', 'Window Sticker', 'VIN decode' ou tout terme technique interne."
     )
 
     user_prompt = f"Humanise cette annonce:\n\n{raw_text}"
     if ctx_info:
-        user_prompt += f"\n\nPROFIL DU VÉHICULE:\n{ctx_info}"
+        user_prompt += (
+            "\n\n[CONTEXTE INTERNE — ne JAMAIS recopier tel quel, sert uniquement au ton]\n"
+            f"{ctx_info}\n[FIN CONTEXTE INTERNE]"
+        )
     if vin_specs_text:
-        user_prompt += f"\n\nCARACTÉRISTIQUES CERTIFIÉES:\n{vin_specs_text}"
+        user_prompt += (
+            "\n\n[SPECS CERTIFIEES — a integrer dans le corps, reformulees naturellement]\n"
+            f"{vin_specs_text}\n[FIN SPECS]"
+        )
 
     try:
         response = client.chat.completions.create(
@@ -1050,6 +1082,32 @@ def rebuild_posts_map(limit: int = 2000, cooldown_days: int = 7) -> Dict[str, Di
 # MAIN
 # -------------------------
 def main() -> None:
+    # 2026-04-23: Boot banner — identifie sans ambiguite la version deployee
+    print("=" * 70, flush=True)
+    print("[BOOT] runner_cron_prod.py version=2026-04-23-neuf-sanitize-condition", flush=True)
+    print(
+        f"[BOOT] INCLUDE_NEUF={INCLUDE_NEUF} "
+        f"POST_NEUF_TO_FB={POST_NEUF_TO_FB} "
+        f"POST_NEUF_MAX_PER_RUN={POST_NEUF_MAX_PER_RUN}",
+        flush=True,
+    )
+    print(
+        f"[BOOT] INVENTORY_PATH={INVENTORY_PATH} "
+        f"INVENTORY_NEUF_PATH={INVENTORY_NEUF_PATH}",
+        flush=True,
+    )
+    print(
+        f"[BOOT] MAX_TARGETS={MAX_TARGETS} USE_AI={USE_AI} "
+        f"USE_STICKER_AD={USE_STICKER_AD}",
+        flush=True,
+    )
+    try:
+        from pipeline.cliches import sanitize_ad_text  # noqa: F401
+        print("[BOOT] sanitize_ad_text=OK (filtres leak PROFIL/tinyurl actifs)", flush=True)
+    except Exception as e:
+        print(f"[BOOT WARN] sanitize_ad_text indisponible: {e}", flush=True)
+    print("=" * 70, flush=True)
+
     sb = get_client(SUPABASE_URL, SUPABASE_KEY)
 
     run_id = _run_id()
@@ -1058,24 +1116,44 @@ def main() -> None:
     inv_db = get_inventory_map(sb)
     posts_db = get_posts_map(sb)
 
-    page_urls = [
-        f"{BASE_URL}{INVENTORY_PATH}",
-        f"{BASE_URL}{INVENTORY_PATH}?page=2",
-        f"{BASE_URL}{INVENTORY_PATH}?page=3",
-    ]
+    # ─────────────────────────────────────────────────────────────
+    # Scrape BOTH /inventaire-occasion AND /inventaire-neuf
+    # Each detail URL is tagged with its condition based on the path.
+    # ─────────────────────────────────────────────────────────────
+    paths_to_scrape: List[tuple] = [(INVENTORY_PATH, "occasion")]
+    if INCLUDE_NEUF and INVENTORY_NEUF_PATH:
+        paths_to_scrape.append((INVENTORY_NEUF_PATH, "neuf"))
 
-    detail_urls: List[str] = []
-    for url in page_urls:
+    page_urls: List[tuple] = []  # list of (url, condition)
+    for path, cond in paths_to_scrape:
+        page_urls.append((f"{BASE_URL}{path}", cond))
+        for p in range(2, 6):  # up to page=5 per condition (we stop on empty)
+            page_urls.append((f"{BASE_URL}{path}?page={p}", cond))
+
+    detail_url_to_condition: Dict[str, str] = {}
+    for url, cond in page_urls:
         try:
             html = fetch_html(SESSION, url, timeout=30)
-            detail_urls += parse_inventory_listing_urls(BASE_URL, INVENTORY_PATH, html)
+            # Use the matching base path for regex extraction
+            base_path = INVENTORY_PATH if cond == "occasion" else INVENTORY_NEUF_PATH
+            urls_found = parse_inventory_listing_urls(BASE_URL, base_path, html)
+            if not urls_found and "?page=" in url:
+                # empty page reached, skip the rest of pagination for this cond
+                continue
+            for u in urls_found:
+                # preserve the first condition we see (both paths don't overlap)
+                detail_url_to_condition.setdefault(u, cond)
         except Exception as e:
             print(f"[WARN] fetch listing failed url={url} err={e}", flush=True)
 
-    detail_urls = list(dict.fromkeys(detail_urls))
+    detail_urls = list(detail_url_to_condition.keys())
     if not detail_urls:
         print("[WARN] No detail urls found. Abort.", flush=True)
         return
+
+    print(f"[SCRAPE] found {len(detail_urls)} vehicles "
+          f"({sum(1 for c in detail_url_to_condition.values() if c == 'occasion')} occasion, "
+          f"{sum(1 for c in detail_url_to_condition.values() if c == 'neuf')} neuf)", flush=True)
 
     current: Dict[str, Dict[str, Any]] = {}
     for u in detail_urls:
@@ -1088,6 +1166,10 @@ def main() -> None:
 
             slug = slugify(title, stock)
             v["slug"] = slug
+            # NEW 2026-04-22: propagate the condition (neuf/occasion) detected
+            # from the listing URL so downstream consumers (inventory upsert,
+            # FB-post gating, CalcAuto AiPro) can filter/act accordingly.
+            v["condition"] = detail_url_to_condition.get(u, "occasion")
             current[slug] = v
         except Exception as e:
             print(f"[WARN] parse vehicle failed url={u} err={e}", flush=True)
@@ -1095,6 +1177,55 @@ def main() -> None:
     if not current:
         print("[WARN] No vehicles parsed. Abort.", flush=True)
         return
+
+    # ─────────────────────────────────────────────────────────────
+    # 2026-04-22: Upsert into `inventory` table (w/ condition neuf|occasion).
+    # This keeps the Supabase inventory in sync with the live website
+    # for BOTH the Kenbot Dashboard and CalcAuto AiPro (which reads via
+    # /api/inventory/unified).
+    # ─────────────────────────────────────────────────────────────
+    try:
+        from supabase_db import upsert_inventory as _upsert_inv
+        inv_rows: List[Dict[str, Any]] = []
+        for slug, v in current.items():
+            inv_rows.append({
+                "slug": slug,
+                "stock": (v.get("stock") or "").strip().upper(),
+                "url": v.get("url"),
+                "title": v.get("title"),
+                "vin": (v.get("vin") or "").strip().upper() or None,
+                "price_int": v.get("price_int"),
+                "km_int": v.get("km_int"),
+                "status": "ACTIVE",
+                "condition": v.get("condition") or "occasion",
+                "last_seen": now,
+                "updated_at": now,
+            })
+        if inv_rows:
+            # Dedup by stock (PK) — PostgreSQL rejects same ON CONFLICT key twice in one batch
+            _dedup: Dict[str, Dict[str, Any]] = {}
+            for r in inv_rows:
+                k = (r.get("stock") or "").strip().upper()
+                if k:
+                    _dedup[k] = r
+            inv_rows_d = list(_dedup.values())
+            if len(inv_rows_d) != len(inv_rows):
+                print(f"[INV] Dedup {len(inv_rows)} -> {len(inv_rows_d)} rows on stock PK", flush=True)
+            try:
+                _upsert_inv(sb, inv_rows_d)
+                n_neuf = sum(1 for r in inv_rows_d if r["condition"] == "neuf")
+                n_occ = len(inv_rows_d) - n_neuf
+                print(f"[INV] Supabase inventory upsert OK: {n_occ} occasion + {n_neuf} neuf", flush=True)
+            except Exception as e:
+                # Fallback: retry without `condition` if the column doesn't exist yet
+                if "condition" in str(e).lower() or "42703" in str(e):
+                    rows_no_cond = [{k: x for k, x in r.items() if k != "condition"} for r in inv_rows_d]
+                    _upsert_inv(sb, rows_no_cond)
+                    print(f"[INV] Upsert fallback without `condition`: {len(rows_no_cond)} rows", flush=True)
+                else:
+                    raise
+    except Exception as e:
+        print(f"[INV] Upsert inventory failed (non-blocking): {e}", flush=True)
 
     # Enregistrer le run MAINTENANT (avant le pré-cache qui a besoin du run_id en FK)
     try:
@@ -1376,6 +1507,62 @@ def main() -> None:
                         new_slugs.append(slug)
                         print(f"[META MISSING → NEW] stock={stock} slug={slug} — ajoute comme NEW (pas sur FB)", flush=True)
 
+    # ─────────────────────────────────────────────────────────────
+    # 2026-04-22/23: Gate FB auto-posting for NEW vehicles behind POST_NEUF_TO_FB.
+    # By default (flag=0), new cars are added to inventory but NOT posted
+    # to Facebook automatically. Set KENBOT_POST_NEUF_TO_FB=1 in Render to
+    # enable auto-publication of new vehicles (same pipeline as occasion:
+    # StickerToAd for Stellantis + OpenAI humanization).
+    #
+    # Quand POST_NEUF_TO_FB=1, on plafonne le nombre de neufs par run via
+    # POST_NEUF_MAX_PER_RUN pour eviter de spammer FB a la premiere activation.
+    # Log stock-par-stock pour debug precis.
+    # ─────────────────────────────────────────────────────────────
+    new_neuf_slugs: List[str] = []
+    new_occ_slugs: List[str] = []
+    for s in new_slugs:
+        cond = ((current.get(s) or {}).get("condition") or "occasion").lower()
+        if cond == "neuf":
+            new_neuf_slugs.append(s)
+        else:
+            new_occ_slugs.append(s)
+
+    if not POST_NEUF_TO_FB:
+        for s in new_neuf_slugs:
+            vv = current.get(s) or {}
+            print(
+                f"[GATE NEUF] stock={(vv.get('stock') or '').strip().upper()} "
+                f"slug={s} ignore car KENBOT_POST_NEUF_TO_FB=0",
+                flush=True,
+            )
+        if new_neuf_slugs:
+            print(
+                f"[GATE] {len(new_neuf_slugs)} vehicules NEUF gardes en inventaire "
+                f"mais non publies sur Facebook (KENBOT_POST_NEUF_TO_FB=0)",
+                flush=True,
+            )
+        # Retire les neufs de new_slugs
+        new_slugs = new_occ_slugs
+    else:
+        # Plafond neuf pour eviter rafale FB (rate limit + modération)
+        capped_neuf = new_neuf_slugs[:POST_NEUF_MAX_PER_RUN]
+        if len(new_neuf_slugs) > POST_NEUF_MAX_PER_RUN:
+            remainder = new_neuf_slugs[POST_NEUF_MAX_PER_RUN:]
+            print(
+                f"[GATE NEUF CAP] {len(remainder)} neufs reportes au prochain run "
+                f"(cap={POST_NEUF_MAX_PER_RUN}/run). Ce run publie "
+                f"{len(capped_neuf)} neufs.",
+                flush=True,
+            )
+            for s in capped_neuf:
+                vv = current.get(s) or {}
+                print(
+                    f"[GATE NEUF OK] stock={(vv.get('stock') or '').strip().upper()} "
+                    f"slug={s} → publication FB ce run",
+                    flush=True,
+                )
+        new_slugs = new_occ_slugs + capped_neuf
+
     targets: List[Tuple[str, str]] = (
         [(s, "UNSOLD") for s in unsold_slugs]  # PRIORITÉ MAX: corriger les faux VENDU
         + [(s, "PHOTOS_ADDED") for s in photos_added[:REFRESH_NO_PHOTO_LIMIT]]
@@ -1421,6 +1608,36 @@ def main() -> None:
                 if len(parts) > 1:
                     base_text = parts[1]
 
+            # 2026-04-22: Nettoyer les cliches/tinyurl du vieux texte AVANT de le republier
+            # (evite de ressusciter des intros "expert automobile" ou des liens tinyurl morts)
+            if base_text:
+                import re as _re
+                # Sanitizer central (tinyurl, PROFIL DU VÉHICULE, Type: pickup_hd, etc.)
+                try:
+                    from pipeline.cliches import sanitize_ad_text
+                    base_text = sanitize_ad_text(base_text)
+                except Exception:
+                    # Fallback minimal
+                    base_text = base_text.replace(
+                        "tinyurl.com/EvaluerMonAuto",
+                        "kenbot-dashboard-five.vercel.app/reprise",
+                    )
+                # Retirer les phrases-intros contenant "en tant qu'expert", "comme expert", etc.
+                for _pat in (
+                    r"En tant qu\'?expert[^.!?]*[.!?]\s*",
+                    r"Comme expert[^.!?]*[.!?]\s*",
+                    r"Expert automobile[^.!?]*[.!?]\s*",
+                    r"(?:Je suis|J'ai|Avec) (?:un expert|passionn[ée] depuis)[^.!?]*[.!?]\s*",
+                    r"Depuis pr[èe]s de (?:20|vingt) ans[^.!?]*[.!?]\s*",
+                    r"Avec mes (?:\d+|plusieurs) ann[ée]es[^.!?]*[.!?]\s*",
+                    r"Passionn[ée] par (?:les|l'univers)[^.!?]*[.!?]\s*",
+                    r"Apr[èe]s deux d[ée]cennies[^.!?]*[.!?]\s*",
+                ):
+                    base_text = _re.sub(_pat, "", base_text, flags=_re.IGNORECASE)
+                # Normaliser les blancs multiples laissés par les suppressions
+                base_text = _re.sub(r"  +", " ", base_text)
+                base_text = _re.sub(r"\n\s*\n\s*\n+", "\n\n", base_text).strip()
+
             if not base_text or len(base_text) < 50:
                 # Pas de texte original → régénérer
                 base_text = _build_ad_text(sb, run_id, slug, v, "NEW")
@@ -1433,6 +1650,7 @@ def main() -> None:
                 upsert_post(sb, {
                     "slug": slug, "post_id": post_id, "status": "ACTIVE",
                     "last_updated_at": now, "base_text": base_text, "stock": old_stock,
+                    "condition": v.get("condition") or "occasion",
                 })
                 unsold_count += 1
                 print(f"[UNSOLD] ✅ slug={slug} stock={old_stock} — restauré comme ACTIF", flush=True)
@@ -1556,7 +1774,8 @@ def main() -> None:
 
         if event == "PRICE_CHANGED":
             old = inv_db.get(slug) or {}
-            old_post = posts_db.get(slug) or {}
+            # FIX boucle infinie: chercher par STOCK (stable) au lieu du slug (peut changer)
+            old_post = posts_db_by_stock.get(stock) or posts_db.get(slug) or {}
             post_id = (old_post.get("post_id") or "").strip()
 
             if not post_id:
@@ -1599,7 +1818,8 @@ def main() -> None:
         # FIX #2: PHOTOS_ADDED - Réutiliser msg, publier correctement
         # =========================================================
         if event == "PHOTOS_ADDED":
-            old_post = posts_db.get(slug) or {}
+            # FIX boucle infinie: chercher par STOCK (stable) au lieu du slug (peut changer)
+            old_post = posts_db_by_stock.get(stock) or posts_db.get(slug) or {}
             old_post_id = (old_post.get("post_id") or "").strip()
 
             # Réutiliser msg déjà généré et validé (plus de double _build_ad_text!)
@@ -1623,6 +1843,7 @@ def main() -> None:
                         "published_at": now, "last_updated_at": now,
                         "base_text": base_text, "no_photo": False,
                         "photo_count": len(photos[:POST_PHOTOS]), "stock": stock,
+                        "condition": v.get("condition") or "occasion",
                     })
                     posted += 1
                     print(f"[NEW from reset] ✅ slug={slug} stock={stock} post_id={new_post_id} photos={len(photos)}", flush=True)
@@ -1637,6 +1858,7 @@ def main() -> None:
                             "published_at": now, "last_updated_at": now,
                             "base_text": base_text, "no_photo": False,
                             "photo_count": 0, "stock": stock,
+                            "condition": v.get("condition") or "occasion",
                         })
                         log_event(sb, slug, "PUBLISH_FAILED", {"run_id": run_id, "error": str(e)[:200]})
                     except Exception:
@@ -1706,6 +1928,7 @@ def main() -> None:
                         "published_at": now, "last_updated_at": now,
                         "base_text": base_text[:500] if base_text else "", "no_photo": True,
                         "photo_count": 0, "stock": stock,
+                        "condition": v.get("condition") or "occasion",
                     })
                 except Exception:
                     pass
@@ -1767,6 +1990,7 @@ def main() -> None:
                     "published_at": now, "last_updated_at": now,
                     "base_text": msg[:500] if msg else "", "no_photo": True,
                     "photo_count": 0, "stock": stock,
+                    "condition": v.get("condition") or "occasion",
                 })
             except Exception:
                 pass
@@ -1851,6 +2075,219 @@ def main() -> None:
 
     if cleaned:
         print(f"[CLEANUP DONE] {cleaned} posts nettoyes", flush=True)
+
+    # =========================================================
+    # CLEANUP LEAK GLOBAL (2026-04-23): Sanitize tous les posts ACTIVE contenant
+    # des fuites de contexte interne (PROFIL DU VÉHICULE, Marque: le truck...,
+    # Type: pickup_hd, tinyurl.com, etc.). Utilise pipeline.cliches.sanitize_ad_text
+    # comme source unique de verite.
+    # Tourne à chaque cron, corrige max 30 posts par run (rate limit FB).
+    # =========================================================
+    CLEANUP_LEAK_LIMIT = 30
+    leak_cleaned = 0
+    try:
+        from pipeline.cliches import sanitize_ad_text as _san, has_leak as _has_leak
+        rows_leak = (
+            sb.table("posts")
+            .select("slug,stock,post_id,base_text,status")
+            .eq("status", "ACTIVE")
+            .execute()
+            .data
+            or []
+        )
+        for row in rows_leak:
+            if leak_cleaned >= CLEANUP_LEAK_LIMIT:
+                break
+            post_id = (row.get("post_id") or "").strip()
+            base_text = row.get("base_text") or ""
+            slug_r = row.get("slug") or ""
+            stock_r = (row.get("stock") or "").strip().upper()
+
+            if not post_id or not base_text:
+                continue
+            if not _has_leak(base_text):
+                continue
+
+            cleaned_leak = _san(base_text)
+            if not cleaned_leak or cleaned_leak == base_text:
+                continue
+
+            try:
+                update_post_text(post_id, FB_TOKEN, cleaned_leak)
+                upsert_post(sb, {
+                    "slug": slug_r, "post_id": post_id, "base_text": cleaned_leak,
+                    "last_updated_at": utc_now_iso(), "stock": stock_r,
+                })
+                leak_cleaned += 1
+                print(f"[CLEANUP LEAK] slug={slug_r} stock={stock_r} fuite de contexte retiree", flush=True)
+                log_event(sb, slug_r, "LEAK_SANITIZED", {"post_id": post_id})
+                time.sleep(max(1, SLEEP_BETWEEN))
+            except Exception as e:
+                print(f"[CLEANUP LEAK ERROR] slug={slug_r} err={e}", flush=True)
+    except Exception as e:
+        print(f"[CLEANUP LEAK] Skipped: {e}", flush=True)
+
+    if leak_cleaned:
+        print(f"[CLEANUP LEAK DONE] {leak_cleaned} posts nettoyes (fuites contexte)", flush=True)
+
+    # =========================================================
+    # CLEANUP TINYURL: Remplacer l'ancien lien tinyurl.com/EvaluerMonAuto
+    # par le vrai lien direct kenbot-dashboard-five.vercel.app/reprise
+    # (l'ancien tinyurl demande un mot de passe — ne fonctionne pas)
+    # Tourne à chaque cron, corrige max 10 posts par run
+    # =========================================================
+    OLD_LINK = "tinyurl.com/EvaluerMonAuto"
+    NEW_LINK = "kenbot-dashboard-five.vercel.app/reprise"
+    CLEANUP_TINY_LIMIT = 25  # raised 2026-04-22: enough to drain backlog in 1-2 runs
+    tiny_cleaned = 0
+    try:
+        rows_tiny = (
+            sb.table("posts")
+            .select("slug,stock,post_id,base_text,status")
+            .eq("status", "ACTIVE")
+            .execute()
+            .data
+            or []
+        )
+        for row in rows_tiny:
+            if tiny_cleaned >= CLEANUP_TINY_LIMIT:
+                break
+            post_id = (row.get("post_id") or "").strip()
+            base_text = row.get("base_text") or ""
+            slug_r = row.get("slug") or ""
+            stock_r = (row.get("stock") or "").strip().upper()
+
+            if not post_id or not base_text:
+                continue
+            if OLD_LINK not in base_text:
+                continue
+
+            new_text = base_text.replace(OLD_LINK, NEW_LINK)
+            try:
+                update_post_text(post_id, FB_TOKEN, new_text)
+                upsert_post(sb, {
+                    "slug": slug_r, "post_id": post_id, "base_text": new_text,
+                    "last_updated_at": utc_now_iso(), "stock": stock_r,
+                })
+                tiny_cleaned += 1
+                print(f"[CLEANUP TINYURL] slug={slug_r} stock={stock_r} lien mis a jour", flush=True)
+                log_event(sb, slug_r, "LINK_UPDATED", {"post_id": post_id, "old": OLD_LINK, "new": NEW_LINK})
+                time.sleep(max(1, SLEEP_BETWEEN))
+            except Exception as e:
+                print(f"[CLEANUP TINYURL ERROR] slug={slug_r} err={e}", flush=True)
+    except Exception as e:
+        print(f"[CLEANUP TINYURL] Skipped: {e}", flush=True)
+
+    if tiny_cleaned:
+        print(f"[CLEANUP TINYURL DONE] {tiny_cleaned} posts mis a jour avec vrai lien", flush=True)
+
+    # =========================================================
+    # CLEANUP INTRO CLICHES: Detecte les intros contenant des cliches interdits
+    # (ex: "En tant qu'expert automobile avec 20 ans d'expérience...") et les
+    # supprime en gardant le reste du texte (specs, footer, hashtags) intact.
+    # Max 8 posts par run pour eviter rate limit Facebook.
+    # =========================================================
+    CLEANUP_INTRO_LIMIT = 25  # raised 2026-04-22: drain backlog faster
+    intro_cleaned = 0
+    try:
+        from pipeline.cliches import CLICHES_INTERDITS_LIST
+
+        rows_intro = (
+            sb.table("posts")
+            .select("slug,stock,post_id,base_text,status")
+            .eq("status", "ACTIVE")
+            .execute()
+            .data
+            or []
+        )
+        for row in rows_intro:
+            if intro_cleaned >= CLEANUP_INTRO_LIMIT:
+                break
+            post_id = (row.get("post_id") or "").strip()
+            base_text = row.get("base_text") or ""
+            slug_r = row.get("slug") or ""
+            stock_r = (row.get("stock") or "").strip().upper()
+
+            if not post_id or not base_text:
+                continue
+
+            # Separer intro (avant 1er separateur) du reste
+            SEP = "━━━━━━━━━━━━━━━━━━━━"
+            if SEP not in base_text:
+                continue
+
+            parts = base_text.split(SEP, 1)
+            intro_part = parts[0]
+            rest = SEP + parts[1]
+
+            intro_low = intro_part.lower()
+            cliche_found = None
+            for c in CLICHES_INTERDITS_LIST:
+                if c in intro_low:
+                    cliche_found = c
+                    break
+
+            if not cliche_found:
+                continue
+
+            # Retirer les lignes contenant le cliche ET toute ligne purement narrative
+            # avant la premiere ligne technique (🚗, 💥, 📊, 🧾, ✨)
+            lines = intro_part.split("\n")
+            new_intro_lines = []
+            found_first_tech = False
+            for line in lines:
+                low = line.lower()
+                # Si on n'a pas encore atteint la section technique, filtrer les cliches
+                if not found_first_tech:
+                    # Detecter si c'est une ligne technique (commence avec emoji vehicule)
+                    stripped = line.strip()
+                    if stripped.startswith(("🚗", "💥", "📊", "🧾", "✨", "🔥", "👀", "⚡", "✅")):
+                        found_first_tech = True
+                        new_intro_lines.append(line)
+                        continue
+                    # Ligne narrative avec cliche → skip
+                    has_cliche = any(c in low for c in CLICHES_INTERDITS_LIST)
+                    if has_cliche:
+                        continue
+                    # Ligne narrative vide → garder
+                    if not stripped:
+                        new_intro_lines.append(line)
+                        continue
+                    # Ligne narrative SANS cliche mais avant section tech → on garde
+                    new_intro_lines.append(line)
+                else:
+                    new_intro_lines.append(line)
+
+            cleaned_intro = "\n".join(new_intro_lines).rstrip() + "\n\n"
+            new_text = cleaned_intro + rest
+
+            # Safety: ne pas publier si texte trop court apres nettoyage
+            if len(new_text) < MIN_POST_TEXT_LEN:
+                print(f"[CLEANUP INTRO SKIP] slug={slug_r} texte trop court apres nettoyage", flush=True)
+                continue
+            if new_text.strip() == base_text.strip():
+                continue
+
+            try:
+                update_post_text(post_id, FB_TOKEN, new_text)
+                upsert_post(sb, {
+                    "slug": slug_r, "post_id": post_id, "base_text": new_text,
+                    "last_updated_at": utc_now_iso(), "stock": stock_r,
+                })
+                intro_cleaned += 1
+                print(f"[CLEANUP INTRO] slug={slug_r} stock={stock_r} cliche retire='{cliche_found}'", flush=True)
+                log_event(sb, slug_r, "INTRO_CLEANED", {
+                    "post_id": post_id, "cliche": cliche_found,
+                    "old_len": len(base_text), "new_len": len(new_text),
+                })
+                time.sleep(max(1, SLEEP_BETWEEN))
+            except Exception as e:
+                print(f"[CLEANUP INTRO ERROR] slug={slug_r} err={e}", flush=True)
+    except Exception as e:
+        print(f"[CLEANUP INTRO] Skipped: {e}", flush=True)
+
+    if intro_cleaned:
+        print(f"[CLEANUP INTRO DONE] {intro_cleaned} intros nettoyees", flush=True)
 
 if __name__ == "__main__":
     main()

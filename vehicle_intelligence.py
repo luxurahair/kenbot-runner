@@ -941,6 +941,11 @@ def build_vehicle_context(vehicle: Dict[str, Any]) -> Dict[str, Any]:
 
         # URL
         "url": vehicle.get("url", ""),
+
+        # 2026-04-23: condition propagated from scraper (neuf | occasion)
+        # Utilise par le prompt IA pour adapter le ton (neuf = pas d'historique/km,
+        # occasion = km/etat OK)
+        "condition": (vehicle.get("condition") or "occasion").strip().lower(),
     }
 
     return context
