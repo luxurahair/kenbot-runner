@@ -1,3 +1,7 @@
+Parfait Daniel, tu as collé l'ancien contenu du fichier cliches.py actuellement sur kenbot-runner. Il manque 2 fonctions critiques (sanitize_ad_text et has_leak).
+
+Voici le contenu COMPLET à coller — remplace TOUT le contenu de cliches.py sur GitHub par ça :
+
 """
 pipeline/cliches.py — Filtre anti-cliches centralise.
 Source unique de verite pour les cliches interdits et le filtrage.
@@ -103,3 +107,121 @@ def remove_cliche_lines(text: str) -> str:
         if not has_cliche and not has_vulgar:
             cleaned.append(line)
     return "\n".join(cleaned).strip()
+
+
+# ============================================================
+# SANITIZER ULTIME — derniere ligne de defense avant publication FB
+# ============================================================
+
+# Types internes (vehicle_type) qui ne doivent JAMAIS apparaitre dans le texte
+_INTERNAL_TYPES = (
+    "pickup_hd", "pickup", "muscle_car", "off_road", "suv_premium",
+    "suv_compact", "citadine", "exotique", "collector", "general",
+    "sedan", "coupe", "sport", "van", "minivan",
+)
+
+# Patterns de fuite de contexte ("internal brand identity" -> ne doit pas fuir)
+_LEAKED_MARQUE_PATTERNS = (
+    r"le truck qui travaille", r"le char qui", r"la bête", r"la bete",
+    r"le heavy-duty qui", r"le vus qui", r"le pickup qui",
+    r"la citadine qui", r"la sportive qui", r"le suv qui",
+)
+
+_LEAKED_MODELE_PATTERNS = (
+    r"le heavy-duty qui remorque", r"le truck qui", r"le char qui",
+    r"la b[êe]te qui", r"le vus qui", r"la citadine qui", r"le pickup qui",
+)
+
+
+def sanitize_ad_text(text: str) -> str:
+    """
+    Derniere defense avant publication Facebook.
+    Retire TOUTES les fuites de contexte interne et liens morts.
+    Appelee sur chaque base_text juste avant FB.create_post / FB.update_post.
+    """
+    if not text:
+        return ""
+
+    # 1) Remplacer les vieux tinyurl par le vrai lien direct
+    text = text.replace(
+        "tinyurl.com/EvaluerMonAuto",
+        "kenbot-dashboard-five.vercel.app/reprise",
+    )
+    text = text.replace(
+        "https://tinyurl.com/EvaluerMonAuto",
+        "https://kenbot-dashboard-five.vercel.app/reprise",
+    )
+
+    # 2) Supprimer le bloc complet "PROFIL DU VEHICULE" (fuite de prompt)
+    text = re.sub(
+        r"\n*\s*PROFIL\s+DU\s+V[ÉE]HICULE\s*:\s*\n"
+        r"(?:[ \t]*(?:Marque|Mod[èe]le|Type|Brand|Model)\s*:[^\n]*\n?)+",
+        "\n",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    # 3) Retirer les lignes "Type: <type_interne>" orphelines
+    types_pat = "|".join(_INTERNAL_TYPES)
+    text = re.sub(
+        rf"^[ \t]*Type\s*:\s*({types_pat})\s*\n?",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    # 4) Retirer les lignes "Marque: <identity_interne>" orphelines
+    for pat in _LEAKED_MARQUE_PATTERNS:
+        text = re.sub(
+            rf"^[ \t]*Marque\s*:\s*[^\n]*{pat}[^\n]*\n?",
+            "",
+            text,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+
+    # 5) Retirer les lignes "Modele: <known_for_interne>" orphelines
+    for pat in _LEAKED_MODELE_PATTERNS:
+        text = re.sub(
+            rf"^[ \t]*Mod[èe]le\s*:\s*[^\n]*{pat}[^\n]*\n?",
+            "",
+            text,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+
+    # 6) Retirer les lignes tone-tag orphelines
+    text = re.sub(
+        r"^[ \t]*Marque\s*:\s*(?:le|la)\s+(?:truck|char|vus|pickup|suv|b[êe]te|citadine|sportive)[^\n]*\n?",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(
+        r"^[ \t]*Mod[èe]le\s*:\s*(?:le|la)\s+(?:heavy-?duty|truck|char|vus|pickup|suv|b[êe]te|citadine|sportive)[^\n]*\n?",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    # 7) Normaliser les retours a la ligne multiples
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+
+    return text.strip()
+
+
+def has_leak(text: str) -> bool:
+    """Detecte s'il reste une fuite de contexte apres/avant sanitize."""
+    if not text:
+        return False
+    low = text.lower()
+    if "tinyurl.com/evaluermonauto" in low:
+        return True
+    if re.search(r"profil\s+du\s+v[ée]hicule\s*:", low):
+        return True
+    for t in _INTERNAL_TYPES:
+        if re.search(rf"\btype\s*:\s*{re.escape(t)}\b", low):
+            return True
+    for pat in _LEAKED_MARQUE_PATTERNS + _LEAKED_MODELE_PATTERNS:
+        if re.search(pat, low):
+            return True
+    return False
