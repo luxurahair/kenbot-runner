@@ -1,341 +1,223 @@
 """
-pipeline/generator.py — Fonctions de generation unifiees.
-Point d'entree central pour toute generation de texte AI.
-Delegue au client centralise et utilise les prompts centralises.
+pipeline/cliches.py — Filtre anti-cliches centralise.
+Source unique de verite pour les cliches interdits et le filtrage.
 """
 
-import random
-from typing import Dict, Any, Optional
-
-from pipeline.client import chat_completion, get_default_model, get_smart_model
-from pipeline.cliches import filter_cliches, remove_cliche_lines
-from pipeline.prompts import (
-    build_accroche_system_prompt,
-    build_smart_prompt,
-    build_humanize_prompt,
-    build_intro_prompt,
-    SYSTEM_PROMPT_V3,
-    ANGLES_PAR_TYPE,
-)
-
+import re
+from typing import List
 
 # ============================================================
-# HELPERS
+# CLICHES INTERDITS — Liste maitre
 # ============================================================
 
-def _fmt_money(value) -> str:
-    if value in (None, ""):
-        return ""
-    try:
-        n = int(float(value))
-        return f"{n:,}".replace(",", " ") + " $"
-    except Exception:
-        return str(value).strip()
+CLICHES_INTERDITS_LIST: List[str] = [
+    "sillonner les routes",
+    "sillonner la beauce",
+    "parfait pour l'hiver",
+    "parfait pour l'hiver québécois",
+    "affronter l'hiver",
+    "prêt à conquérir",
+    "prête à dominer",
+    "dominer les routes",
+    "conçu pour affronter",
+    "idéal pour les aventures",
+    "n'attend plus que toi",
+    "ce bijou",
+    "cette merveille",
+    "cette beauté",
+    "viens le voir",
+    "véritable machine",
+    "monstre de puissance",
+    "bête de route",
+    "sensation de conduite",
+    "vous séduira",
+    "ne cherchez plus",
+    "l'occasion parfaite",
+    "faire tourner les têtes",
+    "conquérir les chemins",
+    "parcourir les routes de beauce",
+    "arpenter les routes",
+    "routes de la beauce",
+    "routes de beauce",
+    "chemins de la beauce",
+    "paysages de la beauce",
+    "paysages beauceron",
+    "faire tourner les têtes",
+    "faire tourner les tetes",
+    "passionné par les voitures depuis",
+    "passionne par les voitures depuis",
+    "en tant que passionné",
+    "en tant que passionne",
+    "deux décennies d'expérience",
+    "deux decennies d'experience",
+    "expérience de conduite exceptionnelle",
+    "experience de conduite exceptionnelle",
+    "saura répondre à vos besoins",
+    "saura repondre a vos besoins",
+    "ne manque pas de",
+    "véritable partenaire",
+    "veritable partenaire",
+    "choix exceptionnel",
+]
+
+# Version texte pour injection dans les prompts
+CLICHES_INTERDITS_PROMPT = """
+PHRASES STRICTEMENT INTERDITES (ne JAMAIS utiliser):
+""" + "\n".join(f"- \"{c}\"" for c in CLICHES_INTERDITS_LIST)
+
+# Mots vulgaires interdits
+VULGAR_WORDS: List[str] = [
+    "couilles", "balls", "badass", "bitch", "cul ", "merde", "crisse",
+    "tabarnac", "calisse", "ostie", "fuck", "shit", "damn", "ass ", "sexy",
+]
 
 
-def _fmt_km(value) -> str:
-    if value in (None, ""):
-        return ""
-    try:
-        n = int(float(value))
-        return f"{n:,}".replace(",", " ") + " km"
-    except Exception:
-        return str(value).strip()
-
-
-def _vehicle_price(vehicle: Dict[str, Any]) -> str:
-    v = vehicle or {}
-    raw = v.get("price")
-    if raw in (None, ""):
-        raw = v.get("price_int")
-    return _fmt_money(raw)
-
-
-def _vehicle_mileage(vehicle: Dict[str, Any]) -> str:
-    v = vehicle or {}
-    raw = v.get("mileage")
-    if raw in (None, ""):
-        raw = v.get("km")
-    if raw in (None, ""):
-        raw = v.get("km_int")
-    return _fmt_km(raw)
-
-
-def _get_features_text(vehicle: Dict[str, Any]) -> str:
-    features = vehicle.get("features") or []
-    comfort = vehicle.get("comfort") or []
-    all_features = features + comfort
-    if not all_features:
-        return "Non specifies"
-    return ", ".join(str(f) for f in all_features[:5])
-
-
-def _safe_trim(text: str, max_chars: int) -> str:
-    txt = (text or "").strip()
-    if len(txt) <= max_chars:
-        return txt
-    phone = "418-222-3939"
-    if phone in txt:
-        idx = txt.find(phone) + len(phone)
-        if idx <= max_chars:
-            return txt[:idx].rstrip(" .,!?;:-")
-    cut = txt[:max_chars].rstrip(" .,!?;:-")
-    return cut + "..."
-
-
-# ============================================================
-# GENERATION V2 (llm.py compatible)
-# ============================================================
-
-def generate_ad_text(
-    vehicle: Dict[str, Any],
-    kind: str = "default",
-    max_chars: int = 400,
-) -> str:
+def filter_cliches(text: str) -> str:
     """
-    Genere une accroche AI Facebook variee, centree sur Daniel Giroux.
-    Compatible avec llm.py v2.
+    Filtre de securite: retire le texte si un cliche est detecte.
+    Retourne le texte original ou chaine vide si cliche trouve.
     """
-    try:
-        from classifier import classify
-    except ImportError:
-        def classify(v):
-            return "default"
-
-    v = vehicle or {}
-    title = (v.get("title") or "Vehicule").strip()
-    price = _vehicle_price(v)
-    mileage = _vehicle_mileage(v)
-    stock = str(v.get("stock") or "").strip()
-    features = _get_features_text(v)
-
-    vehicle_type = classify(v) if kind == "default" else kind
-    if vehicle_type == "price_changed":
-        vehicle_type = classify(v)
-
-    # Construire l'angle selon l'event
-    if kind == "price_changed":
-        old_price = _fmt_money(v.get("old_price"))
-        new_price = _fmt_money(v.get("new_price"))
-        event_angle = f"""
-EVENEMENT: BAISSE DE PRIX
-- Ancien prix: {old_price}
-- Nouveau prix: {new_price}
-- Fais sentir l'opportunite avec un ton vendeur humain
-- Mentionne clairement la baisse de prix
-- Cree un sentiment d'urgence SANS etre agressif
-"""
-    else:
-        angle_config = ANGLES_PAR_TYPE.get(vehicle_type, ANGLES_PAR_TYPE["default"])
-        exemple = random.choice(angle_config["exemples"])
-        focus = angle_config["focus"]
-        event_angle = f"""
-EVENEMENT: NOUVEAU VEHICULE
-- {exemple}
-- Focus sur: {focus}
-"""
-
-    system_prompt = build_accroche_system_prompt(
-        title=title,
-        price=price,
-        mileage=mileage,
-        stock=stock,
-        features=features,
-        vehicle_type=vehicle_type,
-        event_angle=event_angle,
-        max_chars=max_chars,
-    )
-
-    txt = chat_completion(
-        system_prompt=system_prompt,
-        user_message=f"Genere une accroche vendeuse et UNIQUE pour ce {title}. Evite absolument les cliches listes.",
-        model=get_default_model(),
-        max_tokens=150,
-        temperature=0.9,
-        top_p=0.95,
-    )
-
-    if not txt:
-        return ""
-
-    txt = filter_cliches(txt)
-    return _safe_trim(txt, max_chars)
-
-
-def humanize_text(raw_text: str, vehicle: Dict[str, Any] = None) -> str:
-    """
-    Prend un texte genere (souvent robotique) et le rend plus naturel.
-    Compatible avec llm.py v2.
-    """
-    prompt = build_humanize_prompt(raw_text)
-
-    result = chat_completion(
-        system_prompt=prompt,
-        user_message="Reecris l'introduction.",
-        model=get_default_model(),
-        max_tokens=300,
-        temperature=0.85,
-    )
-
-    if not result:
-        return raw_text
-
-    result = filter_cliches(result)
-    if not result:
-        return raw_text
-
-    return result
-
-
-def generate_intro_only(vehicle: Dict[str, Any], max_chars: int = 250) -> str:
-    """
-    Genere SEULEMENT une intro accrocheuse.
-    Compatible avec llm.py v2.
-    """
-    try:
-        from classifier import classify
-    except ImportError:
-        def classify(v):
-            return "default"
-
-    v = vehicle or {}
-    title = (v.get("title") or "Vehicule").strip()
-    price = _vehicle_price(v)
-    km = _vehicle_mileage(v)
-    features = _get_features_text(v)
-
-    vehicle_type = classify(v)
-    angle_config = ANGLES_PAR_TYPE.get(vehicle_type, ANGLES_PAR_TYPE["default"])
-    focus = angle_config["focus"]
-
-    system_prompt = build_intro_prompt(
-        title=title,
-        price=price,
-        km_formatted=km,
-        features=features,
-        vehicle_type=vehicle_type,
-        focus=focus,
-        max_chars=max_chars,
-    )
-
-    result = chat_completion(
-        system_prompt=system_prompt,
-        user_message=f"Genere une intro accrocheuse pour ce {title}.",
-        model=get_default_model(),
-        max_tokens=120,
-        temperature=0.9,
-    )
-
-    if not result:
-        return ""
-
-    result = filter_cliches(result)
-    return _safe_trim(result, max_chars)
-
-
-# ============================================================
-# GENERATION V3 (llm_v3.py compatible)
-# ============================================================
-
-def generate_smart_text(
-    vehicle: Dict[str, Any],
-    event: str = "NEW",
-    options_text: str = "",
-    old_price=None,
-    new_price=None,
-) -> Optional[str]:
-    """
-    Genere un texte Facebook intelligent et humain pour un vehicule.
-    Compatible avec llm_v3.py.
-    """
-    from vehicle_intelligence import build_vehicle_context
-
-    ctx = build_vehicle_context(vehicle)
-    if old_price:
-        ctx["old_price"] = f"{int(old_price):,}".replace(",", " ") + " $"
-    if new_price:
-        ctx["new_price"] = f"{int(new_price):,}".replace(",", " ") + " $"
-
-    # Enrichir avec VIN NHTSA
-    vin_specs_text = vehicle.get("_vin_specs_text", "")
-    if not vin_specs_text:
-        try:
-            from vin_decoder import decode_vin, format_specs_for_prompt, format_engine_line
-            vin_val = (vehicle.get("vin") or "").strip().upper()
-            if len(vin_val) >= 11:
-                specs = decode_vin(vin_val)
-                if specs:
-                    vin_specs_text = format_specs_for_prompt(specs)
-                    if not ctx.get("hp") and specs.get("engine_hp"):
-                        ctx["hp"] = specs["engine_hp"]
-                        ctx["engine"] = format_engine_line(specs).replace(f" — {specs['engine_hp']} HP", "")
-        except Exception:
-            pass
-
-    prompt = build_smart_prompt(ctx, event, options_text)
-    if vin_specs_text:
-        prompt += f"\n\nCARACTERISTIQUES CERTIFIEES:\n{vin_specs_text}"
-
-    text = chat_completion(
-        system_prompt=SYSTEM_PROMPT_V3,
-        user_message=prompt,
-        model=get_smart_model(),
-        max_tokens=1200,
-        temperature=0.85,
-    )
-
     if not text:
-        return None
-
-    text = remove_cliche_lines(text)
-    text = text.strip('"').strip("'")
+        return ""
+    low = text.lower()
+    for cliche in CLICHES_INTERDITS_LIST:
+        if cliche in low:
+            print(f"[PIPELINE CLICHE] Detecte et filtre: {cliche}", flush=True)
+            return ""
     return text
 
 
-def generate_intro_v3(vehicle: Dict[str, Any], max_chars: int = 300) -> Optional[str]:
+def remove_cliche_lines(text: str) -> str:
     """
-    Genere SEULEMENT une intro courte et punchy.
-    Compatible avec llm_v3.py.
+    Retire les LIGNES contenant un cliche, sans vider tout le texte.
+    Utilise par llm_v3 post-processing.
     """
-    from vehicle_intelligence import build_vehicle_context
-    from pipeline.prompts import INTRO_STYLES
+    if not text:
+        return ""
+    lines = text.split("\n")
+    cleaned = []
+    for line in lines:
+        low = line.lower()
+        has_cliche = any(c in low for c in CLICHES_INTERDITS_LIST)
+        has_vulgar = any(v in low for v in VULGAR_WORDS)
+        if not has_cliche and not has_vulgar:
+            cleaned.append(line)
+    return "\n".join(cleaned).strip()
 
-    ctx = build_vehicle_context(vehicle)
-    style = random.choice(INTRO_STYLES)
 
-    title = ctx.get("title", "")
-    hp = ctx.get("hp", "")
-    engine = ctx.get("engine", "")
-    trim_vibe = ctx.get("trim_vibe", "")
-    model_known_for = ctx.get("model_known_for", "")
-    km_desc = ctx.get("km_description", "")
-    price_fmt = ctx.get("price_formatted", "")
-    vehicle_type = ctx.get("vehicle_type", "general")
+# ============================================================
+# SANITIZER ULTIME — derniere ligne de defense avant publication FB
+# ============================================================
 
-    prompt = f"""Ecris SEULEMENT une intro de 2-3 phrases pour cette annonce Facebook.
-Vehicule: {title}
-Prix: {price_fmt}
-KM: {ctx.get('km_formatted', '')} ({km_desc})
-{f'Moteur: {engine} — {hp} HP' if hp else ''}
-{f'Ce modele: {model_known_for}' if model_known_for else ''}
-{f'Ce trim: {trim_vibe}' if trim_vibe else ''}
-Style: {style}
-Type: {vehicle_type}
+# Types internes (vehicle_type) qui ne doivent JAMAIS apparaitre dans le texte
+_INTERNAL_TYPES = (
+    "pickup_hd", "pickup", "muscle_car", "off_road", "suv_premium",
+    "suv_compact", "citadine", "exotique", "collector", "general",
+    "sedan", "coupe", "sport", "van", "minivan",
+)
 
-REGLES: Max {max_chars} caracteres. Pas d'emojis. Pas de cliches. Pas de "routes de la Beauce".
-Parle comme un vrai vendeur quebecois passionne qui connait ses chars.
-Mentionne ce qui rend CE vehicule special."""
+# Patterns de fuite de contexte ("internal brand identity" -> ne doit pas fuir)
+_LEAKED_MARQUE_PATTERNS = (
+    r"le truck qui travaille", r"le char qui", r"la bête", r"la bete",
+    r"le heavy-duty qui", r"le vus qui", r"le pickup qui",
+    r"la citadine qui", r"la sportive qui", r"le suv qui",
+)
 
-    text = chat_completion(
-        system_prompt=SYSTEM_PROMPT_V3,
-        user_message=prompt,
-        model=get_smart_model(),
-        max_tokens=200,
-        temperature=0.9,
+_LEAKED_MODELE_PATTERNS = (
+    r"le heavy-duty qui remorque", r"le truck qui", r"le char qui",
+    r"la b[êe]te qui", r"le vus qui", r"la citadine qui", r"le pickup qui",
+)
+
+
+def sanitize_ad_text(text: str) -> str:
+    """
+    Derniere defense avant publication Facebook.
+    Retire TOUTES les fuites de contexte interne et liens morts.
+    Appelee sur chaque base_text juste avant FB.create_post / FB.update_post.
+    """
+    if not text:
+        return ""
+
+    # 1) Remplacer les vieux tinyurl par le vrai lien direct
+    text = text.replace(
+        "tinyurl.com/EvaluerMonAuto",
+        "kenbot-dashboard-five.vercel.app/reprise",
+    )
+    text = text.replace(
+        "https://tinyurl.com/EvaluerMonAuto",
+        "https://kenbot-dashboard-five.vercel.app/reprise",
     )
 
-    if not text:
-        return None
+    # 2) Supprimer le bloc complet "PROFIL DU VEHICULE" (fuite de prompt)
+    text = re.sub(
+        r"\n*\s*PROFIL\s+DU\s+V[ÉE]HICULE\s*:\s*\n"
+        r"(?:[ \t]*(?:Marque|Mod[èe]le|Type|Brand|Model)\s*:[^\n]*\n?)+",
+        "\n",
+        text,
+        flags=re.IGNORECASE,
+    )
 
-    text = text.strip('"').strip("'")
-    return text[:max_chars]
+    # 3) Retirer les lignes "Type: <type_interne>" orphelines
+    types_pat = "|".join(_INTERNAL_TYPES)
+    text = re.sub(
+        rf"^[ \t]*Type\s*:\s*({types_pat})\s*\n?",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    # 4) Retirer les lignes "Marque: <identity_interne>" orphelines
+    for pat in _LEAKED_MARQUE_PATTERNS:
+        text = re.sub(
+            rf"^[ \t]*Marque\s*:\s*[^\n]*{pat}[^\n]*\n?",
+            "",
+            text,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+
+    # 5) Retirer les lignes "Modele: <known_for_interne>" orphelines
+    for pat in _LEAKED_MODELE_PATTERNS:
+        text = re.sub(
+            rf"^[ \t]*Mod[èe]le\s*:\s*[^\n]*{pat}[^\n]*\n?",
+            "",
+            text,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+
+    # 6) Retirer les lignes tone-tag orphelines
+    text = re.sub(
+        r"^[ \t]*Marque\s*:\s*(?:le|la)\s+(?:truck|char|vus|pickup|suv|b[êe]te|citadine|sportive)[^\n]*\n?",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(
+        r"^[ \t]*Mod[èe]le\s*:\s*(?:le|la)\s+(?:heavy-?duty|truck|char|vus|pickup|suv|b[êe]te|citadine|sportive)[^\n]*\n?",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    # 7) Normaliser les retours a la ligne multiples
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+
+    return text.strip()
+
+
+def has_leak(text: str) -> bool:
+    """Detecte s'il reste une fuite de contexte apres/avant sanitize."""
+    if not text:
+        return False
+    low = text.lower()
+    if "tinyurl.com/evaluermonauto" in low:
+        return True
+    if re.search(r"profil\s+du\s+v[ée]hicule\s*:", low):
+        return True
+    for t in _INTERNAL_TYPES:
+        if re.search(rf"\btype\s*:\s*{re.escape(t)}\b", low):
+            return True
+    for pat in _LEAKED_MARQUE_PATTERNS + _LEAKED_MODELE_PATTERNS:
+        if re.search(pat, low):
+            return True
+    return False
