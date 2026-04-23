@@ -1,8 +1,3 @@
-"""
-pipeline/cliches.py — Filtre anti-cliches centralise.
-Source unique de verite pour les cliches interdits et le filtrage.
-"""
-
 import re
 from typing import List
 
