@@ -532,6 +532,67 @@ def _inject_pdsf_block_and_disclaimer(text: str, v: Dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def _ensure_key_infos_block(text: str, v: Dict[str, Any]) -> str:
+    """Garantit qu'un bloc d'infos clés structuré (💥 prix / 📊 Kilométrage / 🧾 Stock)
+    est présent dans le post — pour OCCASION comme pour NEUF.
+    Si au moins 1 des 3 lignes manque, insère le bloc juste après le titre (ligne vide
+    qui suit la 1ère ligne non-vide).
+    Backporté du monorepo le 2026-05-07 (fix Ram 2500 Big Horn 2025 sans km/stock).
+    """
+    if not v or not isinstance(v, dict) or not text:
+        return text
+
+    price = v.get("price_int") or v.get("price")
+    mileage_raw = v.get("km_int") or v.get("mileage_int") or v.get("mileage") or v.get("km")
+    stock = (v.get("stock") or "").strip().upper()
+    condition = (v.get("condition") or "occasion").strip().lower()
+
+    def _fmt_price(n):
+        try:
+            return f"{int(n):,}".replace(",", " ") + " $"
+        except Exception:
+            return ""
+
+    def _fmt_km(n):
+        try:
+            return f"{int(n):,}".replace(",", " ") + " km"
+        except Exception:
+            return ""
+
+    has_price = "💥" in text and "$" in text[text.find("💥"):text.find("💥") + 60] if "💥" in text else False
+    has_km = "📊 Kilométrage" in text or "📊 Kilometrage" in text
+    has_stock = "🧾 Stock" in text
+
+    lines_to_inject = []
+    if not has_price and price:
+        pstr = _fmt_price(price)
+        if pstr:
+            lines_to_inject.append(f"💥 {pstr} 💥")
+    if not has_km and mileage_raw is not None:
+        kmstr = _fmt_km(mileage_raw)
+        if kmstr:
+            lines_to_inject.append(f"📊 Kilométrage : {kmstr}")
+    if not has_stock and stock:
+        lines_to_inject.append(f"🧾 Stock : {stock}")
+
+    if not lines_to_inject:
+        return text
+
+    block = "\n".join(lines_to_inject)
+    lines = text.split("\n")
+    insert_at = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == "":
+            insert_at = i + 1
+            break
+    if insert_at is None:
+        return block + "\n\n" + text
+
+    new_lines = lines[:insert_at] + [block, ""] + lines[insert_at:]
+    print(f"[KEY_INFOS] stock={stock} injected {len(lines_to_inject)} line(s) condition={condition}", flush=True)
+    return "\n".join(new_lines)
+
+
 def _ensure_contact_footer(text: str, v: Dict[str, Any] = None) -> str:
     """Nettoie le texte IA puis ajoute le footer avec hashtags SEO dynamiques.
     Applique aussi le sanitizer ultime (retire leaks 'PROFIL DU VÉHICULE',
@@ -544,6 +605,10 @@ def _ensure_contact_footer(text: str, v: Dict[str, Any] = None) -> str:
         text = sanitize_ad_text(text)
     except Exception as _e:
         print(f"[SANITIZE] pipeline.cliches.sanitize_ad_text indisponible: {_e}", flush=True)
+    # 2026-05-07: garantit le bloc clé (💥 prix / 📊 Kilométrage / 🧾 Stock).
+    # Injection idempotente — n'ajoute que les lignes manquantes.
+    if v:
+        text = _ensure_key_infos_block(text, v)
     # NEW 2026-04-22: bloc PDSF + disclaimer + lien fiche (neuf uniquement)
     if v:
         text = _inject_pdsf_block_and_disclaimer(text, v)
