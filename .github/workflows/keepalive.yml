@@ -1,0 +1,39 @@
+name: 🫀 Keepalive (prevent 60-day disable)
+
+# GitHub Actions disable scheduled workflows automatically after 60 days
+# of repository inactivity. This workflow runs monthly and bumps a tiny
+# file so the repo always counts as "active" → cron Auto-Repair Monitor
+# + cron Auto-Deploy stay enabled indefinitely.
+
+on:
+  schedule:
+    # Le 15 de chaque mois à 10h UTC (5h Eastern). Bien avant les 60 jours.
+    - cron: '0 10 15 * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump KEEPALIVE.md
+        run: |
+          echo "# Keepalive" > .github/KEEPALIVE.md
+          echo "" >> .github/KEEPALIVE.md
+          echo "Last bump: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> .github/KEEPALIVE.md
+          echo "" >> .github/KEEPALIVE.md
+          echo "Auto-updated by .github/workflows/keepalive.yml (monthly cron)." >> .github/KEEPALIVE.md
+      - name: Commit & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/KEEPALIVE.md
+          if git diff --cached --quiet; then
+            echo "No change"
+            exit 0
+          fi
+          git commit -m "chore(keepalive): monthly bump (prevent 60-day Actions disable)"
+          git push
