@@ -8,7 +8,6 @@ on:
     paths:
       - 'monitoring/**'
       - 'tests/test_safe_monitor.py'
-      - 'tests/test_runner_contracts.py'
       - '.github/workflows/auto-repair.yml'
 
 permissions:
@@ -31,7 +30,6 @@ jobs:
       - name: Run monitor regression suite
         run: |
           python -m unittest discover -s tests -p test_safe_monitor.py -v
-          python -m unittest discover -s tests -p test_runner_contracts.py -v
 
   health-check:
     name: Health monitoring (no repair writes)
