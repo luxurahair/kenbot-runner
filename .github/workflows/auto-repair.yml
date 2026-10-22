@@ -1,227 +1,48 @@
-# =====================================================
-# KENBOT AUTO-REPAIR - GitHub Actions Workflow
-# =====================================================
-# Surveillance automatique toutes les 5 minutes.
-# ZERO configuration manuelle requise.
-
-name: "\U0001F527 Kenbot Auto-Repair Monitor"
+name: "Kenbot Safe Health Monitor"
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
-
+    - cron: '*/15 * * * *'
   workflow_dispatch:
-    inputs:
-      action:
-        description: 'Action a effectuer'
-        required: true
-        default: 'check'
-        type: choice
-        options:
-          - check
-          - repair
-          - rollback
-          - status
 
-env:
-  SERVICE_URL: https://kenbot-dashboard-api.onrender.com
-  SERVICE_NAME: kenbot-dashboard-api
-  SMTP_HOST: smtp.gmail.com
-  SMTP_PORT: "587"
-  SMTP_USER: info@luxuradistribution.com
-  SMTP_PASS: zgvsfiajermjqpgh
-  DEPLOY_HOOKS: https://api.vercel.com/v1/integrations/deploy/prj_FBYVaVmG32m2UMe1pwmlPN2lDAZv/0cBqEJL8UW
+permissions:
+  contents: read
+
+concurrency:
+  group: kenbot-safe-monitor
+  cancel-in-progress: false
 
 jobs:
   health-check:
-    name: "\U0001F50D Health Check"
     runs-on: ubuntu-latest
-    outputs:
-      status: ${{ steps.check.outputs.status }}
-      needs_repair: ${{ steps.check.outputs.needs_repair }}
-
+    timeout-minutes: 3
+    env:
+      SERVICE_URL: https://kenbot-dashboard-api.onrender.com
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Run Health Checks
-        id: check
+      - name: Check public API health without changing production
+        shell: bash
         run: |
-          python << 'EOF'
-          import requests
+          set -euo pipefail
+          python3 - <<'PY'
           import os
+          import time
+          import urllib.error
+          import urllib.request
 
-          SERVICE_URL = os.environ.get('SERVICE_URL', 'https://kenbot-dashboard-api.onrender.com')
-
-          endpoints = [
-              {"path": "/api/health", "name": "Health", "critical": True},
-              {"path": "/api/evaluations", "name": "Evaluations", "critical": True},
-              {"path": "/api/cron/status", "name": "Cron Status", "critical": False},
-              {"path": "/api/services/status", "name": "Services", "critical": False},
-              {"path": "/api/wholesale-contacts", "name": "Wholesale", "critical": False},
-          ]
-
-          results = {"passed": 0, "failed": 0, "critical_failed": False}
-
-          print(f"Checking {SERVICE_URL}")
-          print("=" * 50)
-
-          for ep in endpoints:
+          url = os.environ["SERVICE_URL"].rstrip("/") + "/api/health"
+          for attempt in range(1, 4):
               try:
-                  response = requests.get(f"{SERVICE_URL}{ep['path']}", timeout=30)
-                  if response.status_code == 200:
-                      results["passed"] += 1
-                      print(f"[OK] {ep['name']}: Status {response.status_code}")
-                  else:
-                      results["failed"] += 1
-                      print(f"[FAIL] {ep['name']}: Status {response.status_code}")
-                      if ep["critical"]:
-                          results["critical_failed"] = True
-              except Exception as e:
-                  results["failed"] += 1
-                  print(f"[FAIL] {ep['name']}: {str(e)[:50]}")
-                  if ep["critical"]:
-                      results["critical_failed"] = True
-
-          print("=" * 50)
-
-          if results["failed"] == 0:
-              status = "HEALTHY"
-              needs_repair = "false"
-          elif results["critical_failed"]:
-              status = "DOWN"
-              needs_repair = "true"
+                  request = urllib.request.Request(url, headers={"User-Agent": "kenbot-safe-monitor/2"})
+                  with urllib.request.urlopen(request, timeout=12) as response:
+                      code = response.status
+                  if code == 200:
+                      print("HEALTHY: public health endpoint returned HTTP 200")
+                      break
+                  print(f"Attempt {attempt}: HTTP {code}")
+              except (urllib.error.URLError, TimeoutError) as exc:
+                  print(f"Attempt {attempt}: {type(exc).__name__}")
+              if attempt < 3:
+                  time.sleep(5)
           else:
-              status = "DEGRADED"
-              needs_repair = "false"
-
-          print(f"Status: {status}")
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"status={status}\n")
-              f.write(f"needs_repair={needs_repair}\n")
-          EOF
-
-  auto-repair:
-    name: "\U0001F527 Auto Repair"
-    runs-on: ubuntu-latest
-    needs: health-check
-    if: needs.health-check.outputs.needs_repair == 'true' || github.event.inputs.action == 'repair'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 10
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Analyze and Repair
-        run: |
-          echo "Analyzing service errors..."
-          ERROR_TEXT=$(curl -s --max-time 10 $SERVICE_URL/api/health 2>&1 || echo "Service unreachable")
-          echo "Error: $ERROR_TEXT"
-
-          if echo "$ERROR_TEXT" | grep -qi "timeout\|connection"; then
-            echo "Action: restart"
-            curl -s -X POST "$DEPLOY_HOOKS" || echo "Vercel hook failed"
-            git config user.name "Kenbot Auto-Repair"
-            git config user.email "bot@kennebec.auto"
-            git commit --allow-empty -m "Auto-repair: trigger restart $(date +%s)"
-            git push
-          else
-            echo "Action: rollback"
-            curl -s -X POST "$DEPLOY_HOOKS" || echo "Vercel hook failed"
-            STABLE_COMMIT=$(git log --oneline -10 | grep -v "Auto-repair\|fix:" | head -1 | cut -d' ' -f1)
-            if [ -n "$STABLE_COMMIT" ]; then
-              echo "Rolling back to $STABLE_COMMIT"
-              git config user.name "Kenbot Auto-Repair"
-              git config user.email "bot@kennebec.auto"
-              git reset --hard $STABLE_COMMIT
-              git push --force
-            else
-              echo "No stable commit found, triggering redeploy..."
-              git config user.name "Kenbot Auto-Repair"
-              git config user.email "bot@kennebec.auto"
-              git commit --allow-empty -m "Auto-repair: trigger redeploy"
-              git push
-            fi
-          fi
-
-  notify:
-    name: "\U0001F4E7 Send Alert"
-    runs-on: ubuntu-latest
-    needs: [health-check, auto-repair]
-    if: always() && needs.health-check.outputs.status != 'HEALTHY'
-
-    steps:
-      - name: Send Email Alert
-        run: |
-          python3 << 'EOF'
-          import smtplib, os
-          from email.mime.text import MIMEText
-          from email.mime.multipart import MIMEMultipart
-
-          status = "${{ needs.health-check.outputs.status }}"
-          needs_repair = "${{ needs.health-check.outputs.needs_repair }}"
-          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
-          html = f"""
-          <html><body style="font-family:Arial;padding:20px;">
-          <h1>Kenbot API Monitor</h1>
-          <h2 style="color:{'#dc3545' if status=='DOWN' else '#ffc107'}">Status: {status}</h2>
-          <p><b>Service:</b> kenbot-dashboard-api</p>
-          <p><b>URL:</b> https://kenbot-dashboard-api.onrender.com</p>
-          <p><b>Auto-repair:</b> {'OUI' if needs_repair=='true' else 'NON'}</p>
-          <p><a href="{run_url}">Voir le workflow</a></p>
-          <hr><p style="color:#666">Kennebec Auto - Monitoring automatique</p>
-          </body></html>
-          """
-
-          msg = MIMEMultipart()
-          msg['Subject'] = f"Kenbot API: {status}"
-          msg['From'] = os.environ['SMTP_USER']
-          msg['To'] = os.environ['SMTP_USER']
-          msg.attach(MIMEText(html, 'html'))
-
-          try:
-              with smtplib.SMTP(os.environ['SMTP_HOST'], int(os.environ['SMTP_PORT'])) as s:
-                  s.starttls()
-                  s.login(os.environ['SMTP_USER'], os.environ['SMTP_PASS'])
-                  s.send_message(msg)
-              print("Email envoye!")
-          except Exception as e:
-              print(f"Erreur email: {e}")
-          EOF
-
-  save-stable:
-    name: "\U0001F4BE Save Stable State"
-    runs-on: ubuntu-latest
-    needs: health-check
-    if: needs.health-check.outputs.status == 'HEALTHY'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Record Stable Commit
-        run: |
-          COMMIT_HASH=$(git rev-parse HEAD)
-          echo $COMMIT_HASH > .last_stable_commit
-
-          if git diff --quiet .last_stable_commit 2>/dev/null; then
-            echo "Stable commit unchanged"
-          else
-            git config user.name "Kenbot Auto-Repair"
-            git config user.email "bot@kennebec.auto"
-            git add .last_stable_commit
-            git commit -m "Record stable commit: ${COMMIT_HASH:0:8}" || echo "No changes"
-            git push || echo "Push skipped"
-          fi
+              raise SystemExit("UNHEALTHY: alert via GitHub Actions failure. No automatic rollback, force push, or deploy triggered.")
+          PY
