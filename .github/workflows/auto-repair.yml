@@ -41,6 +41,7 @@ jobs:
           python -m unittest discover -s tests -p test_safe_monitor.py -v
           python -m unittest discover -s tests -p test_backup_guard.py -v
           python -m unittest discover -s tests -p test_runner_contracts.py -v
+          python -m unittest discover -s tests -p test_repair_planner.py -v
 
   health-check:
     name: Health monitoring (no repair writes)
