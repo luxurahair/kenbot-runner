@@ -11,6 +11,7 @@ on:
       - 'tests/test_safe_monitor.py'
       - 'tests/test_backup_guard.py'
       - 'tests/test_runner_contracts.py'
+      - 'tests/test_decision_adapter.py'
       - '.github/workflows/auto-repair.yml'
   pull_request:
     paths:
@@ -45,6 +46,7 @@ jobs:
           python -m unittest discover -s tests -p test_runner_contracts.py -v
           python -m unittest discover -s tests -p test_repair_planner.py -v
           python -m unittest discover -s tests -p test_guarded_render_recovery.py -v
+          python -m unittest discover -s tests -p test_decision_adapter.py -v
 
   health-check:
     name: Guarded health recovery (opt-in)
@@ -62,3 +64,45 @@ jobs:
           persist-credentials: false
       - name: Run guarded health and recovery
         run: python -m monitoring.guarded_render_recovery
+
+  decision-artifact-contract:
+    name: V3 decision artifact (synthetic fixture only)
+    needs: validate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Create synthetic healthy probe
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          now = datetime.now(timezone.utc).isoformat()
+          probe = {
+              "schema_version": "kenbot.probe.v1",
+              "service": "kenbot-api",
+              "observations": [{"status": "HEALTHY", "source": "synthetic-ci-fixture", "observed_at": now}],
+          }
+          with open("probe-fixture.json", "w", encoding="utf-8") as f:
+              json.dump(probe, f)
+          PY
+      - name: Generate and validate V3 artifact
+        run: |
+          python -m monitoring.decision_adapter probe-fixture.json repair-decision.json
+          python - <<'PY'
+          import json
+          d = json.load(open("repair-decision.json", encoding="utf-8"))
+          assert d["schema_version"] == "kenbot.repair-decision.v3"
+          assert d["action"] == "none" and d["execution_allowed"] is False
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-repair-decision-${{ github.run_id }}
+          path: repair-decision.json
+          if-no-files-found: error
+          retention-days: 14
