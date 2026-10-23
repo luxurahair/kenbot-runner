@@ -42,16 +42,19 @@ jobs:
           python -m unittest discover -s tests -p test_backup_guard.py -v
           python -m unittest discover -s tests -p test_runner_contracts.py -v
           python -m unittest discover -s tests -p test_repair_planner.py -v
+          python -m unittest discover -s tests -p test_guarded_render_recovery.py -v
 
   health-check:
     name: Health monitoring (no repair writes)
     needs: validate
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     env:
+      KENBOT_AUTOREPAIR_ENABLED: ${{ vars.KENBOT_AUTOREPAIR_ENABLED }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       KENBOT_EXTRA_HEALTH_URLS_JSON: ${{ vars.KENBOT_EXTRA_HEALTH_URLS_JSON }}
     steps:
       - uses: actions/checkout@v4
-      - name: Run bounded health monitor
-        run: python -m monitoring.safe_monitor
+      - name: Run guarded health and recovery
+        run: python -m monitoring.guarded_render_recovery
