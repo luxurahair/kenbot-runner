@@ -47,4 +47,6 @@ The CI job `V3 decision artifact (synthetic fixture only)` generates a clearly l
 - `monitoring/incident_store.py`: authenticated Postgres connection reader, atomic advisory lock + lease fencing, hourly cooldown and two-attempt 24-hour budget. No restart action.
 - `monitoring/incident_decision_cli.py`: optional read-only database-backed decision CLI. Requires a dedicated server-side `KENBOT_INCIDENT_DATABASE_URL`, `KENBOT_EXECUTION_ENV` and `KENBOT_TENANT_SCOPE`, plus psycopg 3. Not called by GitHub Actions.
 - `monitoring/sql/incident_store_v3_DRAFT.sql`: private schema and tables, **not applied**. DB role policies and grants must be validated before deployment.
-- `tests/test_incident_store.py`: offline concurrency simulation (eight simultaneous workers) and lease-fencing tests; a real Postgres concurrency integration test remains required before production.
+- `tests/test_incident_store.py`: offline concurrency simulation (eight simultaneous workers) and lease-fencing tests; the disposable PostgreSQL 17 CI job verifies actual concurrent claims and lease fencing; a staging Supabase role/RLS and end-to-end integration test remains required before production.
+
+- `tests/test_incident_store_postgres.py`: real PostgreSQL 17 integration tests on a disposable CI service, including eight independent concurrent connections. No production Supabase access.
