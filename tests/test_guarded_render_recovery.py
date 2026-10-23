@@ -34,8 +34,11 @@ class GuardedRecoveryTests(unittest.TestCase):
         def api(method,path,token):
             calls.append(method)
             return api_ok(method,path,token)
-        self.assertEqual(run(enabled=True,token="fake",api=api,check=failing,sleeper=lambda _:None,now=NOW)[0],"RESTART_REQUESTED")
+        self.assertEqual(run(enabled=True,token="fake",api=api,check=failing,sleeper=lambda _:None,now=NOW)[0],"RESTART_UNVERIFIED")
         self.assertEqual(calls,["GET","GET","POST"])
+    def test_verified_recovery_after_restart(self):
+        results=iter([{"status":"SERVICE_ERROR"},{"status":"SERVICE_ERROR"},{"status":"SERVICE_ERROR"},{"status":"HEALTHY"}])
+        self.assertEqual(run(enabled=True,token="fake",api=api_ok,check=lambda _:next(results),sleeper=lambda _:None,now=NOW)[0],"RESTORED")
     def test_api_error_blocked(self):
         def bad(*args): raise ValueError("offline")
         self.assertEqual(run(enabled=True,token="fake",api=bad,check=failing,sleeper=lambda _:None,now=NOW)[0],"BLOCKED")
