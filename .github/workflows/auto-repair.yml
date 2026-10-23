@@ -45,7 +45,7 @@ jobs:
           python -m unittest discover -s tests -p test_guarded_render_recovery.py -v
 
   health-check:
-    name: Health monitoring (no repair writes)
+    name: Guarded health recovery (opt-in)
     needs: validate
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
