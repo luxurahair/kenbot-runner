@@ -73,12 +73,12 @@ VERCEL_DEPLOY_HOOK = os.getenv("DEPLOY_HOOKS", "")
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "info@luxuradistribution.com")
-SMTP_PASS = os.getenv("SMTP_PASS", "zgvsfiajermjqpgh")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "info@luxuradistribution.com")
 
 # GitHub configuration
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO = "luxurahair/kenbot-dashboard"
+GITHUB_REPO = os.getenv("GITHUB_REPO", "luxurahair/kenbot-runner")
 
 # Endpoints critiques a surveiller
 CRITICAL_ENDPOINTS = [
@@ -284,20 +284,9 @@ def get_current_commit() -> Optional[str]:
     return None
 
 def rollback_to_commit(commit_hash: str) -> bool:
-    log(f"Rollback vers {commit_hash[:8]}...", "ROLLBACK")
-
-    success, output = git_command(["reset", "--hard", commit_hash])
-    if not success:
-        log(f"Echec reset: {output}", "ERROR")
-        return False
-
-    success, output = git_command(["push", "--force", "origin", "main"])
-    if not success:
-        log(f"Echec push: {output}", "ERROR")
-        return False
-
-    log(f"Rollback reussi vers {commit_hash[:8]}", "OK")
-    return True
+    """Unsafe repository-history rewriting is forbidden for automated recovery."""
+    log("Rollback Git interdit: aucun reset --hard ni push --force automatique.", "ERROR")
+    return False
 
 def rollback_to_stable() -> bool:
     stable_commit = get_last_stable_commit()
@@ -313,33 +302,8 @@ def rollback_to_stable() -> bool:
     return rollback_to_commit(stable_commit)
 
 def restart_service() -> bool:
-    log("Tentative de redemarrage du service...", "REPAIR")
-
-    # 1. Trigger Vercel redeploy via hook
-    try:
-        if VERCEL_DEPLOY_HOOK:
-            r = requests.post(VERCEL_DEPLOY_HOOK, timeout=15)
-            if r.status_code == 200:
-                log("Vercel redeploy declenche via hook", "OK")
-    except Exception as e:
-        log(f"Vercel hook error: {e}", "WARN")
-
-    # 2. Trigger Render redeploy via empty commit
-    render_api_key = os.getenv("RENDER_API_KEY")
-    if render_api_key:
-        try:
-            pass
-        except Exception:
-            pass
-
-    success, _ = git_command(["commit", "--allow-empty", "-m", "Auto-repair: trigger redeploy"])
-    if success:
-        success, _ = git_command(["push", "origin", "main"])
-        if success:
-            log("Redeploiement declenche", "OK")
-            return True
-
-    log("Impossible de redemarrer le service", "ERROR")
+    """Explicitly disabled until deployment-aware safe recovery is implemented."""
+    log("Redemarrage automatique desactive: diagnostic et approbation requis.", "WARN")
     return False
 
 # =====================================================
