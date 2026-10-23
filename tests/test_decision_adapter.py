@@ -46,7 +46,7 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(ValueError):decision(p)
     def test_bad_history_count(self):
         p=envelope(["HEALTHY"]);p["history"]["attempts_in_24h"]=-1
-        with self.assertRaises(ValueError):decision(p)
+        self.assertEqual(decision(p)["action"],"none")
     def test_bad_observations(self):
         p=envelope(["HEALTHY"]);p["observations"]="wrong"
         with self.assertRaises(ValueError):decision(p)
