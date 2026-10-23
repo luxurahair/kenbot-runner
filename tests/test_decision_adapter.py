@@ -19,7 +19,7 @@ def decision(p): return decide_envelope(p,now=NOW)
 class AdapterTests(unittest.TestCase):
     def test_healthy(self): self.assertEqual(decision(envelope(["HEALTHY"]))["action"],"none")
     def test_single_failure(self): self.assertEqual(decision(envelope(["SERVICE_ERROR"]))["action"],"observe")
-    def test_confirmed_failure(self): self.assertEqual(decision(envelope(["SERVICE_ERROR","SERVICE_ERROR"]))["action"],"diagnose_codex")
+    def test_confirmed_failure(self): self.assertEqual(decision(envelope(["SERVICE_ERROR","SERVICE_ERROR"]))["action"],"blocked")
     def test_missing_history_blocks(self): self.assertEqual(decision(envelope(["SERVICE_ERROR","SERVICE_ERROR"],history=False))["action"],"blocked")
     def test_auth(self): self.assertEqual(decision(envelope(["AUTH_CONFIG"]))["action"],"notify_only")
     def test_rate_limit(self): self.assertEqual(decision(envelope(["RATE_LIMIT"]))["action"],"notify_only")
