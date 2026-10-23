@@ -11,6 +11,8 @@ on:
       - 'tests/test_safe_monitor.py'
       - 'tests/test_backup_guard.py'
       - 'tests/test_runner_contracts.py'
+      - 'tests/test_decision_adapter.py'
+      - 'tests/test_incident_store.py'
       - '.github/workflows/auto-repair.yml'
   pull_request:
     paths:
@@ -45,6 +47,8 @@ jobs:
           python -m unittest discover -s tests -p test_runner_contracts.py -v
           python -m unittest discover -s tests -p test_repair_planner.py -v
           python -m unittest discover -s tests -p test_guarded_render_recovery.py -v
+          python -m unittest discover -s tests -p test_decision_adapter.py -v
+          python -m unittest discover -s tests -p test_incident_store.py -v
 
   health-check:
     name: Guarded health recovery (opt-in)
@@ -62,3 +66,91 @@ jobs:
           persist-credentials: false
       - name: Run guarded health and recovery
         run: python -m monitoring.guarded_render_recovery
+
+  decision-artifact-contract:
+    name: V3 decision artifact (synthetic fixture only)
+    needs: validate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Create synthetic healthy probe
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          now = datetime.now(timezone.utc).isoformat()
+          probe = {
+              "schema_version": "kenbot.probe.v1",
+              "service": "kenbot-api",
+              "observations": [{"status": "HEALTHY", "source": "synthetic-ci-fixture", "observed_at": now}],
+          }
+          with open("probe-fixture.json", "w", encoding="utf-8") as f:
+              json.dump(probe, f)
+          PY
+      - name: Generate and validate V3 artifact
+        run: |
+          python -m monitoring.decision_adapter probe-fixture.json repair-decision.json
+          python - <<'PY'
+          import json
+          d = json.load(open("repair-decision.json", encoding="utf-8"))
+          assert d["schema_version"] == "kenbot.repair-decision.v3"
+          assert d["action"] == "none" and d["execution_allowed"] is False
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-repair-decision-${{ github.run_id }}
+          path: repair-decision.json
+          if-no-files-found: error
+          retention-days: 14
+
+  postgres-integration:
+    name: Disposable PostgreSQL lease race
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-test-only
+          POSTGRES_DB: kenbot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kenbot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      KENBOT_TEST_DATABASE_URL: postgresql://postgres:ci-test-only@localhost:5432/kenbot_test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install pinned PostgreSQL driver
+        run: python -m pip install "psycopg[binary]==3.2.10"
+      - name: Prepare disposable private schema
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import psycopg
+          with psycopg.connect(os.environ["KENBOT_TEST_DATABASE_URL"], autocommit=True) as conn:
+              conn.execute("CREATE ROLE anon")
+              conn.execute("CREATE ROLE authenticated")
+              conn.execute(Path("monitoring/sql/incident_store_v3_DRAFT.sql").read_text())
+          PY
+      - name: Run real PostgreSQL race and fencing tests
+        run: python -m unittest discover -s tests -p test_incident_store_postgres.py -v
