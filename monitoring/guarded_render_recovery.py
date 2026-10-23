@@ -95,7 +95,11 @@ def run(*, enabled=False, token="", api=api_request, check=probe, sleeper=time.s
         if third["status"] not in ("SERVICE_ERROR", "NETWORK_ERROR"):
             return "RECOVERED", "Recovered before restart"
         api("POST", "/services/" + SERVICE_ID + "/restart", token)
-        return "RESTART_REQUESTED", "One bounded restart requested; post-restart check required"
+        sleeper(45)
+        after = check(HEALTH_URL)
+        if after["status"] == "HEALTHY":
+            return "RESTORED", "Restart succeeded and health recovered"
+        return "RESTART_UNVERIFIED", "Restart requested but health not yet recovered"
     except (ValueError, KeyError, TypeError, urllib.error.URLError, TimeoutError, OSError):
         return "BLOCKED", "Render API unavailable or invalid response"
 
@@ -106,7 +110,7 @@ def main():
     )
     print(json.dumps({"status":status, "message":message}))
     # Never mark a confirmed unresolved outage healthy.
-    return 0 if status in ("HEALTHY","RECOVERED","RESTART_REQUESTED") else 1
+    return 0 if status in ("HEALTHY","RECOVERED","RESTORED") else 1
 
 if __name__ == "__main__":
     sys.exit(main())
