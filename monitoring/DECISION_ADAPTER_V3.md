@@ -32,7 +32,7 @@ Run: `python -m monitoring.decision_adapter probe.json repair-decision.json`.
 
 Possible `action` values: `none`, `observe`, `diagnose_codex`, `request_safe_restart`, `create_draft_pr`, `notify_only`, `blocked`. The current read-only adapter **never emits write-capable actions** `request_safe_restart` or `create_draft_pr`; those require separately authenticated executors and policies. For Mac Rescue diagnosis, it emits `notify_only` rather than pretending a Mac command has been sent.
 
-The CI job `V3 decision artifact (synthetic fixture only)` generates a clearly labeled **synthetic healthy example** and uploads it for 14 days. This is not a live production probe or an incident log. Real probe ingestion and durable, authenticated history are not yet connected.
+The CI job `V3 decision artifact (synthetic fixture only)` generates a clearly labeled **synthetic healthy example** and uploads it for 14 days. This is not a live production probe or an incident log. A private database reader and SQL schema draft are implemented, but no database schema has been deployed, no production credential configured, and real incident ingestion is not connected.
 
 ## Security and next steps
 
@@ -41,3 +41,10 @@ The CI job `V3 decision artifact (synthetic fixture only)` generates a clearly l
 - Integrate trusted, durable incident history, immutable attempt records and a distributed lease before permitting any action.
 - Keep `monitoring/guarded_render_recovery.py` separate as the existing bounded Render recovery executor; it does not consume this V3 artifact.
 - Test a genuine incident and verified recovery before declaring V3 operational.
+
+## Durable-store development
+
+- `monitoring/incident_store.py`: authenticated Postgres connection reader, atomic advisory lock + lease fencing, hourly cooldown and two-attempt 24-hour budget. No restart action.
+- `monitoring/incident_decision_cli.py`: optional read-only database-backed decision CLI. Requires a dedicated server-side `KENBOT_INCIDENT_DATABASE_URL`, `KENBOT_EXECUTION_ENV` and `KENBOT_TENANT_SCOPE`, plus psycopg 3. Not called by GitHub Actions.
+- `monitoring/sql/incident_store_v3_DRAFT.sql`: private schema and tables, **not applied**. DB role policies and grants must be validated before deployment.
+- `tests/test_incident_store.py`: offline concurrency simulation (eight simultaneous workers) and lease-fencing tests; a real Postgres concurrency integration test remains required before production.
