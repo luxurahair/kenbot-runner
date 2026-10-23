@@ -12,6 +12,7 @@ on:
       - 'tests/test_backup_guard.py'
       - 'tests/test_runner_contracts.py'
       - 'tests/test_decision_adapter.py'
+      - 'tests/test_incident_store.py'
       - '.github/workflows/auto-repair.yml'
   pull_request:
     paths:
@@ -47,6 +48,7 @@ jobs:
           python -m unittest discover -s tests -p test_repair_planner.py -v
           python -m unittest discover -s tests -p test_guarded_render_recovery.py -v
           python -m unittest discover -s tests -p test_decision_adapter.py -v
+          python -m unittest discover -s tests -p test_incident_store.py -v
 
   health-check:
     name: Guarded health recovery (opt-in)
