@@ -1,5 +1,8 @@
 # KENEBEC-AI — Ecosysteme Complet Kennebec Dodge Chrysler
 
+> **Architecture actuelle et future :** [Kenbot Auto-Repair intelligent V3](ARCHITECTURE_AUTO_REPAIR_V3.md) — périmètre réel V2, surveillance multi-service proposée, diagnostic Codex, secours Mac, adaptation automatique aux changements par PR, niveaux de risque, sauvegardes et étapes de livraison. **V3 est une spécification, non un système déjà activé.**
+
+
 Plateforme intelligente pour la gestion automatisee de l'inventaire, la publication Facebook, les evaluations de reprise et le monitoring — Kennebec Dodge Chrysler, Saint-Georges, Beauce.
 
 ---
@@ -45,11 +48,14 @@ kenebec-ai/
 │   └── render.yaml
 │
 ├── MONITORING & AUTO-REPAIR (monitoring/)
-│   ├── auto_repair.py              # Script monitoring + reparation auto
+│   ├── safe_monitor.py             # Health checks bornes et lecture seule
+│   ├── repair_planner.py           # Decisions de recuperation (sans effets de bord)
+│   ├── guarded_render_recovery.py  # Redemarrage Render strictement opt-in
+│   ├── backup_guard.py             # Controle archives critiques en lecture seule
 │   └── README.md                   # Guide installation
 │
 ├── GITHUB ACTIONS (.github/workflows/)
-│   └── auto-repair.yml             # Cron 5 min: health check + repair + email
+│   └── auto-repair.yml             # Cron 15 min: tests + health + recuperation opt-in
 │
 ├── TESTS (tests/)
 │   ├── test_pipeline_generation.py # 80+ tests (AI, VIN, cliches, footer, events)
@@ -86,7 +92,7 @@ kenebec-ai/
 | **kenbot-dashboard-api** | Render Web Service | `https://kenbot-dashboard-api.onrender.com` | API REST backend |
 | **kenbot-dashboard** | Vercel | `https://kenbot-dashboard-five.vercel.app` | Frontend React |
 | **Supabase** | Supabase.co | `https://xjhqkhlocxtawiuokrlp.supabase.co` | PostgreSQL + Storage |
-| **Auto-Repair** | GitHub Actions | (repo kenebec-ai) | Monitoring 5 min + auto-repair |
+| **Auto-Repair** | GitHub Actions | (repo kenbot-runner) | Controle toutes les 15 min; redemarrage Render borne, desactive par defaut |
 
 ---
 
