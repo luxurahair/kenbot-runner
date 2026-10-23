@@ -17,7 +17,7 @@ def timestamp(value):
         raise ValueError("Naive timestamp")
     return t.astimezone(timezone.utc)
 
-def decide_envelope(probe, now=None):
+def decide_envelope(probe, now=None, *, trusted_history=None):
     if not isinstance(probe, dict) or probe.get("schema_version") != "kenbot.probe.v1":
         raise ValueError("Wrong probe schema")
     service = probe.get("service")
@@ -34,17 +34,19 @@ def decide_envelope(probe, now=None):
             raise ValueError("Missing observation source")
         observations.append(Observation(service, item["status"],
                                         timestamp(item.get("observed_at")), item["source"]))
-    history = probe.get("history")
-    verified = (isinstance(history, dict) and history.get("verified") is True
-                and history.get("source") in ("verified-incident-store", "verified-render-deploy-history"))
+    # History embedded in a JSON probe is untrusted, even when marked verified.
+    # Only a direct database reader in the same trusted process may supply history.
+    verified = trusted_history is not None
     attempts = 0
     last = None
     if verified:
-        attempts = history.get("attempts_in_24h")
-        if type(attempts) is not int or attempts < 0:
-            raise ValueError("Invalid attempts")
-        if history.get("last_attempt_at") is not None:
-            last = timestamp(history["last_attempt_at"])
+        from monitoring.incident_store import VerifiedHistory
+        if not isinstance(trusted_history, VerifiedHistory):
+            raise ValueError("Untrusted history object")
+        if trusted_history.service != service:
+            raise ValueError("History service mismatch")
+        attempts = trusted_history.attempts_in_24h
+        last = trusted_history.last_attempt_at
     caps = probe.get("capabilities", {})
     if not isinstance(caps, dict):
         raise ValueError("Invalid capabilities")
