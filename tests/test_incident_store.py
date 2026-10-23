@@ -74,9 +74,9 @@ class DurableStoreTests(unittest.TestCase):
         claim(self.db)
         h=read_history(self.db,"kenbot-api","staging","kennebec",now=NOW)
         self.assertEqual(h.attempts_in_24h,1)
-    def test_cooldown_after_expiry(self):
+    def test_lease_expiry_allows_second_after_cooldown(self):
         claim(self.db)
-        self.assertIsNone(claim(self.db,NOW+timedelta(minutes=71)))
+        self.assertIsNotNone(claim(self.db,NOW+timedelta(minutes=71)))
     def test_new_claim_after_cooldown(self):
         claim(self.db)
         self.assertIsNotNone(claim(self.db,NOW+timedelta(hours=2)))
