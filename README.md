@@ -1,5 +1,8 @@
 # KENEBEC-AI — Ecosysteme Complet Kennebec Dodge Chrysler
 
+> **Architecture actuelle et future :** [Kenbot Auto-Repair intelligent V3](ARCHITECTURE_AUTO_REPAIR_V3.md) — périmètre réel V2, surveillance multi-service proposée, diagnostic Codex, secours Mac, adaptation automatique aux changements par PR, niveaux de risque, sauvegardes et étapes de livraison. **V3 est une spécification, non un système déjà activé.**
+
+
 Plateforme intelligente pour la gestion automatisee de l'inventaire, la publication Facebook, les evaluations de reprise et le monitoring — Kennebec Dodge Chrysler, Saint-Georges, Beauce.
 
 ---
