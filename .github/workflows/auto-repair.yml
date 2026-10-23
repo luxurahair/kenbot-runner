@@ -4,6 +4,13 @@ on:
   schedule:
     - cron: '*/15 * * * *'
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'monitoring/**'
+      - 'tests/test_safe_monitor.py'
+      - 'tests/test_backup_guard.py'
+      - '.github/workflows/auto-repair.yml'
   pull_request:
     paths:
       - 'monitoring/**'
