@@ -32,8 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Run monitor regression suite
@@ -55,6 +57,8 @@ jobs:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       KENBOT_EXTRA_HEALTH_URLS_JSON: ${{ vars.KENBOT_EXTRA_HEALTH_URLS_JSON }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Run guarded health and recovery
         run: python -m monitoring.guarded_render_recovery
