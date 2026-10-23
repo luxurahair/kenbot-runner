@@ -4,6 +4,14 @@ on:
   schedule:
     - cron: '*/15 * * * *'
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'monitoring/**'
+      - 'tests/test_safe_monitor.py'
+      - 'tests/test_backup_guard.py'
+      - 'tests/test_runner_contracts.py'
+      - '.github/workflows/auto-repair.yml'
   pull_request:
     paths:
       - 'monitoring/**'
@@ -32,6 +40,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p test_safe_monitor.py -v
           python -m unittest discover -s tests -p test_backup_guard.py -v
+          python -m unittest discover -s tests -p test_runner_contracts.py -v
 
   health-check:
     name: Health monitoring (no repair writes)
